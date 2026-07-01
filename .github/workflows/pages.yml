@@ -1,0 +1,59 @@
+name: User Guide Pages
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - USER_GUIDE.md
+      - docs/**
+      - .github/workflows/pages.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+
+      - name: Prepare canonical user guide
+        run: |
+          mkdir -p _pages_source
+          printf -- "---\nlayout: default\ntitle: Flowmap User Guide\n---\n\n" > _pages_source/index.md
+          cat USER_GUIDE.md >> _pages_source/index.md
+          cp docs/_config.yml _pages_source/_config.yml
+
+      - name: Build Pages site
+        uses: actions/jekyll-build-pages@v1
+        with:
+          source: ./_pages_source
+          destination: ./_site
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: ./_site
+
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Deploy Pages site
+        id: deployment
+        uses: actions/deploy-pages@v4

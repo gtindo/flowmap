@@ -4,7 +4,7 @@ Flowmap is a local static code-reading workbench for Go. Start from one function
 
 Flowmap displays possible static calls. It does not claim that an edge executes at runtime or expose runtime values.
 
-For installation and complete usage instructions, see [USER_GUIDE.md](USER_GUIDE.md).
+For installation and complete usage instructions, see [USER_GUIDE.md](USER_GUIDE.md) or the [Flowmap documentation site](https://gtindo.github.io/flowmap/).
 
 ## Run
 
@@ -57,3 +57,7 @@ Build the three shareable release archives and their checksum manifest:
 ```sh
 make release VERSION=0.1.0
 ```
+
+Pushing a tag such as `v0.2.0` runs `.github/workflows/release.yml`, builds and verifies every supported archive, and publishes them through GitHub Releases. `.github/workflows/pages.yml` publishes the canonical `USER_GUIDE.md` to GitHub Pages whenever the guide changes on `main`.
+
+Enable **Settings → Pages → Build and deployment → GitHub Actions** once for the repository before the first Pages deployment.

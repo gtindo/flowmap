@@ -1,0 +1,6 @@
+title: Flowmap
+description: A static Go code-reading workbench
+url: https://gtindo.github.io
+baseurl: /flowmap
+theme: minima
+show_downloads: true

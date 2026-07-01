@@ -4,6 +4,8 @@ Flowmap is a local, read-only workbench for understanding Go code through focuse
 
 Flowmap performs static analysis. An edge means a function may call another function; it does not prove that the call occurs for a particular runtime input.
 
+The current online version of this guide is published at <https://gtindo.github.io/flowmap/>.
+
 ## Requirements
 
 - macOS on Apple Silicon or Intel, or Linux on AMD64.

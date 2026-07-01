@@ -36,4 +36,4 @@ darwin-amd64:
 	@tar -C $(DIST) -czf $(DIST)/flowmap_$(VERSION_NUMBER)_darwin_amd64.tar.gz flowmap_$(VERSION_NUMBER)_darwin_amd64
 
 checksums:
-	@cd $(DIST) && shasum -a 256 *.tar.gz > SHA256SUMS
+	@cd $(DIST) && if command -v sha256sum >/dev/null 2>&1; then sha256sum *.tar.gz > SHA256SUMS; else shasum -a 256 *.tar.gz > SHA256SUMS; fi
