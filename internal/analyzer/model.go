@@ -59,11 +59,12 @@ type Graph struct {
 
 // Index is an immutable analysis result safe for concurrent readers.
 type Index struct {
-	Root      string
-	Functions map[string]Function
-	Edges     []Edge
-	Outgoing  map[string][]Edge
-	Incoming  map[string][]Edge
+	Root       string
+	Functions  map[string]Function
+	Edges      []Edge
+	Outgoing   map[string][]Edge
+	Incoming   map[string][]Edge
+	LoadReport LoadReport
 }
 
 // SearchResult is the compact representation used by symbol search.

@@ -56,11 +56,14 @@ func Analyze(ctx context.Context, config Config) (*Index, error) {
 	}
 	loaded, loadErr := packages.Load(packageConfig, "./...")
 	if loadErr != nil {
-		return nil, fmt.Errorf("load Go packages: %w", loadErr)
+		report := LoadReport{Root: root, BuildTags: append([]string(nil), config.BuildTags...)}
+		return nil, fmt.Errorf("load Go packages: %w\nReproduce with: %s", loadErr, report.reproductionCommand())
 	}
 	if len(loaded) == 0 {
-		return nil, fmt.Errorf("load Go packages: no packages found beneath %s", root)
+		report := LoadReport{Root: root, BuildTags: append([]string(nil), config.BuildTags...)}
+		return nil, fmt.Errorf("load Go packages: no packages found beneath %s\nReproduce with: %s", root, report.reproductionCommand())
 	}
+	loadReport := collectLoadReport(root, config.BuildTags, loaded)
 	healthyPackages := make([]*packages.Package, 0, len(loaded))
 	for _, loadedPackage := range loaded {
 		if len(loadedPackage.Errors) == 0 {
@@ -68,7 +71,7 @@ func Analyze(ctx context.Context, config Config) (*Index, error) {
 		}
 	}
 	if len(healthyPackages) == 0 {
-		return nil, fmt.Errorf("load Go packages: every package beneath %s has type or load errors", root)
+		return nil, fmt.Errorf("load Go packages: no analyzable packages beneath %s\n%s", root, loadReport.String())
 	}
 
 	program, ssaPackages := ssautil.AllPackages(healthyPackages, ssa.InstantiateGenerics)
@@ -86,7 +89,7 @@ func Analyze(ctx context.Context, config Config) (*Index, error) {
 
 	index := &Index{
 		Root: root, Functions: make(map[string]Function, len(metas)), Edges: edges,
-		Outgoing: make(map[string][]Edge), Incoming: make(map[string][]Edge),
+		Outgoing: make(map[string][]Edge), Incoming: make(map[string][]Edge), LoadReport: loadReport,
 	}
 	for id, meta := range metas {
 		index.Functions[id] = meta.function

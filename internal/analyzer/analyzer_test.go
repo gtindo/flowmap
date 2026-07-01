@@ -15,6 +15,12 @@ func TestAnalyzeBuildsTypedFocusedGraph(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Analyze() error = %v", err)
 	}
+	if !index.LoadReport.HasFailures() || index.LoadReport.FailedPackageVariants == 0 {
+		t.Fatalf("Analyze() did not report the intentionally broken neighboring package: %#v", index.LoadReport)
+	}
+	if !strings.Contains(index.LoadReport.String(), "undefined: missingSymbol") {
+		t.Fatalf("load warning omitted the underlying Go diagnostic: %s", index.LoadReport.String())
+	}
 	run := findFunction(t, index, ".Run")
 	normalize := findFunction(t, index, ".Normalize")
 	load := findFunction(t, index, ".Load")
@@ -62,6 +68,25 @@ func TestAnalyzeBuildsTypedFocusedGraph(t *testing.T) {
 	}
 	if got := index.Search("TestNormalize", true, 10); len(got) != 1 || !got[0].Test {
 		t.Fatalf("visible test search = %#v", got)
+	}
+}
+
+func TestAnalyzeReportsDiagnosticsWhenEveryPackageIsBroken(t *testing.T) {
+	_, filename, _, _ := runtime.Caller(0)
+	root := filepath.Join(filepath.Dir(filename), "testdata", "allbroken")
+	_, err := Analyze(context.Background(), Config{Root: root, BuildTags: []string{"integration"}})
+	if err == nil {
+		t.Fatal("Analyze() succeeded for an entirely broken module")
+	}
+	message := err.Error()
+	for _, expected := range []string{
+		"load Go packages: no analyzable packages beneath",
+		"[type] broken.go:4:17: undefined: missingSymbol",
+		"test -tags='integration' ./...",
+	} {
+		if !strings.Contains(message, expected) {
+			t.Fatalf("Analyze() error omitted %q:\n%s", expected, message)
+		}
 	}
 }
 

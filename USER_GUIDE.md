@@ -141,10 +141,10 @@ Review an adapter before using it: it determines whether source stays local or i
 ### No packages or functions are found
 
 - Confirm the supplied path contains `go.mod`.
-- Run `go list ./...` inside the target project and resolve its reported errors.
+- Run the reproduction command printed by Flowmap and resolve its reported errors.
 - Confirm the required Go version is installed.
 
-Flowmap tolerates individual broken packages when healthy neighboring packages can still be loaded. If every package is broken, indexing stops with an error.
+Flowmap tolerates individual broken packages when healthy neighboring packages can still be loaded. It prints a warning with deduplicated `go list`, syntax, and type diagnostics for omitted package variants. If every package is broken, indexing stops and prints the same diagnostic report. Flowmap shows up to ten unique errors and reports how many additional errors were omitted from the display.
 
 ### Dependencies cannot be loaded
 

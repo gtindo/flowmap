@@ -5,6 +5,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"strings"
@@ -62,6 +63,7 @@ func run(arguments []string) error {
 	if err != nil {
 		return err
 	}
+	writeLoadWarning(os.Stderr, index.LoadReport)
 	var summarizer server.Summarizer
 	var cache *server.SummaryCache
 	if strings.TrimSpace(*summarizerCommand) != "" {
@@ -77,6 +79,12 @@ func run(arguments []string) error {
 	}
 	fmt.Printf("Flowmap indexed %d functions. Open http://%s\n", len(index.Functions), *address)
 	return app.Listen(ctx, *address)
+}
+
+func writeLoadWarning(writer io.Writer, report analyzer.LoadReport) {
+	if report.HasFailures() {
+		fmt.Fprintln(writer, "flowmap: warning:", report.String())
+	}
 }
 
 // splitTags normalizes the optional build-tag list.
