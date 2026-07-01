@@ -60,4 +60,10 @@ make release VERSION=0.1.0
 
 Pushing a tag such as `v0.2.0` runs `.github/workflows/release.yml`, builds and verifies every supported archive, and publishes them through GitHub Releases. `.github/workflows/pages.yml` publishes the canonical `USER_GUIDE.md` to GitHub Pages whenever the guide changes on `main`.
 
+Maintainers can run the guarded release script from a clean, synchronized `main` branch. It builds the release locally before creating and pushing the annotated tag:
+
+```sh
+scripts/release.sh 0.2.0
+```
+
 Enable **Settings → Pages → Build and deployment → GitHub Actions** once for the repository before the first Pages deployment.

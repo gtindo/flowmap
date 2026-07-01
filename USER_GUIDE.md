@@ -175,3 +175,21 @@ make release VERSION=0.1.0
 ```
 
 Artifacts are written beneath `dist/v0.1.0/`.
+
+## Publish a release
+
+Repository maintainers can build, tag, and push a release with:
+
+```sh
+scripts/release.sh 0.2.0
+```
+
+The script accepts versions with or without the `v` prefix. Before creating a tag, it requires:
+
+- A clean working tree with no untracked files.
+- The checked-out branch to be `main`.
+- Local `main` to exactly match `origin/main` after fetching.
+- The release tag to be absent locally and remotely.
+- The complete `make release` build and test suite to pass.
+
+It then creates an annotated `v0.2.0` tag and pushes only that tag. The tag activates the GitHub release workflow, which rebuilds and publishes the archives and checksum manifest. If the push fails, the local tag is retained for inspection and is never silently deleted or replaced.
