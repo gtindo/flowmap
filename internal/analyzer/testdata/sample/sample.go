@@ -3,6 +3,7 @@ package sample
 
 import (
 	"context"
+	"example.com/dependency"
 	"os"
 	"strings"
 )
@@ -40,6 +41,16 @@ func Load(path string) (Input, error) {
 	}
 	return Input{Text: string(contents)}, nil
 }
+
+// AssemblyHook represents an implementation supplied outside Go.
+func AssemblyHook()
+
+// AssemblyPure represents an authored pure implementation supplied outside Go.
+// Operations (Pure): returns without observable effects.
+func AssemblyPure()
+
+// CallDependency exercises a vendored dependency outside the local graph.
+func CallDependency() { dependency.External() }
 
 // Repeat recursively repeats a string.
 func Repeat(value string, count int) string {

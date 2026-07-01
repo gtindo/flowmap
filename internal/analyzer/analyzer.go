@@ -111,11 +111,17 @@ func packagesByTypes(roots []*packages.Package) map[*types.Package]*packages.Pac
 
 // collectFunctions converts named local SSA functions into stable browser records.
 func collectFunctions(root string, program *ssa.Program, ssaPackages []*ssa.Package, packageByTypes map[*types.Package]*packages.Package) map[string]*functionMeta {
-	_ = ssaPackages
+	// AllFunctions includes dependencies; ssaPackages contains only the roots selected by ./....
+	localPackages := make(map[*ssa.Package]bool, len(ssaPackages))
+	for _, ssaPackage := range ssaPackages {
+		if ssaPackage != nil {
+			localPackages[ssaPackage] = true
+		}
+	}
 	result := make(map[string]*functionMeta)
 	for ssaFunction := range ssautil.AllFunctions(program) {
 		declaration, isDeclaration := ssaFunction.Syntax().(*ast.FuncDecl)
-		if !isDeclaration || declaration.Name == nil || ssaFunction.Pkg == nil {
+		if !isDeclaration || declaration.Name == nil || ssaFunction.Pkg == nil || !localPackages[ssaFunction.Pkg] {
 			continue
 		}
 		position := program.Fset.PositionFor(declaration.Pos(), true)

@@ -18,6 +18,9 @@ func TestAnalyzeBuildsTypedFocusedGraph(t *testing.T) {
 	run := findFunction(t, index, ".Run")
 	normalize := findFunction(t, index, ".Normalize")
 	load := findFunction(t, index, ".Load")
+	assemblyHook := findFunction(t, index, ".AssemblyHook")
+	assemblyPure := findFunction(t, index, ".AssemblyPure")
+	callDependency := findFunction(t, index, ".CallDependency")
 	if run.Classification.Kind != classificationEdge || run.Classification.Provenance != provenanceAuthored {
 		t.Fatalf("Run classification = %#v", run.Classification)
 	}
@@ -26,6 +29,20 @@ func TestAnalyzeBuildsTypedFocusedGraph(t *testing.T) {
 	}
 	if load.Classification.Kind != classificationEdge || !strings.Contains(strings.Join(load.Classification.Evidence, " "), "os.ReadFile") {
 		t.Fatalf("Load classification = %#v", load.Classification)
+	}
+	if assemblyHook.Classification.Kind != classificationUnknown || !strings.Contains(strings.Join(assemblyHook.Classification.Evidence, " "), "effect-unknown") {
+		t.Fatalf("AssemblyHook classification = %#v", assemblyHook.Classification)
+	}
+	if assemblyPure.Classification.Kind != classificationPure || assemblyPure.Classification.Provenance != provenanceAuthored {
+		t.Fatalf("AssemblyPure classification = %#v", assemblyPure.Classification)
+	}
+	if callDependency.Classification.Kind != classificationUnknown || !strings.Contains(strings.Join(callDependency.Classification.Evidence, " "), "effect-unknown") {
+		t.Fatalf("CallDependency classification = %#v", callDependency.Classification)
+	}
+	for _, function := range index.Functions {
+		if function.Package == "example.com/dependency" {
+			t.Fatalf("vendored dependency function included in local graph: %#v", function)
+		}
 	}
 	if len(run.Parameters) != 3 || len(run.Results) != 2 {
 		t.Fatalf("Run contract = params %v results %v", run.Parameters, run.Results)

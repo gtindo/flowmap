@@ -34,6 +34,10 @@ func classifyDirect(declaration *ast.FuncDecl, typeInfo *types.Info, documentati
 	if strings.Contains(normalizedDocumentation, "side effect (edge)") || strings.Contains(normalizedDocumentation, "side effects (edge)") {
 		return Classification{Kind: classificationEdge, Provenance: provenanceAuthored, Evidence: []string{"function documentation declares Side Effect (Edge)"}}, true, false
 	}
+	// Assembly- and linker-backed declarations have effects that Go syntax cannot reveal.
+	if declaration.Body == nil {
+		return Classification{Kind: classificationUnknown, Provenance: provenanceInferred}, false, true
+	}
 
 	evidence := make(map[string]bool)
 	externalCall := false
