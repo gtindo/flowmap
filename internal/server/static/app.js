@@ -9,7 +9,7 @@ let currentSize = { width: 255, height: 110 };
 let activeDrag;
 let activePan;
 let suppressClick = false;
-let viewport;
+let zoomScale = 1;
 let contentBounds = { width: 900, height: 600 };
 let expandedNodes = new Set();
 let expansionRecords = new Map();
@@ -44,6 +44,7 @@ $("close").onclick = () => $("detail").classList.add("hidden");
 document.addEventListener("click", event => { if (!event.target.closest(".search-wrap")) hideResults(); });
 document.addEventListener("pointermove", movePointer);
 document.addEventListener("pointerup", finishPointer);
+window.addEventListener("resize", () => { if (currentGraph) applyViewport(); });
 
 function hideResults() {
   searchGeneration++;
@@ -76,9 +77,9 @@ async function loadGraph() {
     baseRootNode = graph.nodes.find(item => item.id === graph.root);
     expansionRecords = new Map([[graph.root, graph]]);
     expandedNodes = new Set([graph.root]);
-    render(composeGraph(), true);
     $("empty").classList.add("hidden");
     $("workspace").classList.remove("hidden");
+    render(composeGraph(), true);
   } catch (error) { alert(error.message); }
 }
 
@@ -179,7 +180,13 @@ function resizeCanvas(resetViewport = false) {
     maxY = Math.max(maxY, position.y + currentSize.height + 80);
   }
   contentBounds = { width: maxX, height: maxY };
-  if (resetViewport || !viewport) fitGraph(); else applyViewport();
+  if (resetViewport) {
+    zoomScale = 1;
+    applyViewport();
+    $("canvas-wrap").scrollTo(0, 0);
+  } else {
+    applyViewport();
+  }
 }
 
 function drawGraph() {
@@ -305,12 +312,8 @@ function startDrag(event, id, group) {
 
 function dragNode(event) {
   if (!activeDrag) return;
-  const canvas = $("canvas");
-  const bounds = canvas.getBoundingClientRect();
-  const scaleX = viewport.width / bounds.width;
-  const scaleY = viewport.height / bounds.height;
-  const x = Math.max(10, activeDrag.originX + (event.clientX - activeDrag.startX) * scaleX);
-  const y = Math.max(10, activeDrag.originY + (event.clientY - activeDrag.startY) * scaleY);
+  const x = Math.max(10, activeDrag.originX + (event.clientX - activeDrag.startX) / zoomScale);
+  const y = Math.max(10, activeDrag.originY + (event.clientY - activeDrag.startY) / zoomScale);
   activeDrag.moved = true;
   currentPositions.set(activeDrag.id, { x, y });
   activeDrag.group.setAttribute("transform", "translate(" + x + " " + y + ")");
@@ -354,39 +357,54 @@ function toggleHandTool() {
 }
 
 function startPan(event) {
-  if (!viewport || !$("hand-tool").classList.contains("active")) return;
+  if (!currentGraph || !$("hand-tool").classList.contains("active")) return;
   event.preventDefault();
-  activePan = { startX: event.clientX, startY: event.clientY, originX: viewport.x, originY: viewport.y, moved: false };
+  const wrap = $("canvas-wrap");
+  activePan = { startX: event.clientX, startY: event.clientY, originX: wrap.scrollLeft, originY: wrap.scrollTop, moved: false };
   $("canvas").classList.add("panning");
 }
 
 function panGraph(event) {
-  const bounds = $("canvas").getBoundingClientRect();
-  viewport.x = activePan.originX - (event.clientX - activePan.startX) * viewport.width / bounds.width;
-  viewport.y = activePan.originY - (event.clientY - activePan.startY) * viewport.height / bounds.height;
-  activePan.moved = true;
-  applyViewport();
+  const wrap = $("canvas-wrap");
+  const deltaX = event.clientX - activePan.startX;
+  const deltaY = event.clientY - activePan.startY;
+  wrap.scrollLeft = activePan.originX - deltaX;
+  wrap.scrollTop = activePan.originY - deltaY;
+  activePan.moved = activePan.moved || deltaX !== 0 || deltaY !== 0;
 }
 
 function zoomGraph(factor) {
-  if (!viewport) return;
-  const width = Math.min(contentBounds.width * 4, Math.max(250, viewport.width * factor));
-  const height = Math.min(contentBounds.height * 4, Math.max(180, viewport.height * factor));
-  viewport.x += (viewport.width - width) / 2;
-  viewport.y += (viewport.height - height) / 2;
-  viewport.width = width;
-  viewport.height = height;
+  if (!currentGraph) return;
+  const wrap = $("canvas-wrap");
+  const centerX = (wrap.scrollLeft + wrap.clientWidth / 2) / zoomScale;
+  const centerY = (wrap.scrollTop + wrap.clientHeight / 2) / zoomScale;
+  zoomScale = Math.min(4, Math.max(minimumZoom(), zoomScale / factor));
   applyViewport();
+  wrap.scrollLeft = centerX * zoomScale - wrap.clientWidth / 2;
+  wrap.scrollTop = centerY * zoomScale - wrap.clientHeight / 2;
 }
 
 function fitGraph() {
   if (!currentGraph) return;
-  viewport = { x: 0, y: 0, width: contentBounds.width, height: contentBounds.height };
+  const wrap = $("canvas-wrap");
+  zoomScale = Math.min(1, wrap.clientWidth / contentBounds.width, wrap.clientHeight / contentBounds.height);
   applyViewport();
+  wrap.scrollTo(0, 0);
+}
+
+function minimumZoom() {
+  const wrap = $("canvas-wrap");
+  return Math.min(0.1, wrap.clientWidth / contentBounds.width, wrap.clientHeight / contentBounds.height);
 }
 
 function applyViewport() {
-  $("canvas").setAttribute("viewBox", viewport.x + " " + viewport.y + " " + viewport.width + " " + viewport.height);
+  const wrap = $("canvas-wrap");
+  const canvas = $("canvas");
+  const width = Math.max(wrap.clientWidth, contentBounds.width * zoomScale);
+  const height = Math.max(wrap.clientHeight, contentBounds.height * zoomScale);
+  canvas.style.width = width + "px";
+  canvas.style.height = height + "px";
+  canvas.setAttribute("viewBox", "0 0 " + width / zoomScale + " " + height / zoomScale);
 }
 
 function layoutKey() {

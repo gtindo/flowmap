@@ -46,10 +46,18 @@ func TestHandlerServesNavigableGraphViews(t *testing.T) {
 	if strings.Contains(page, "id=\"depth\"") {
 		t.Fatal("workbench still exposes global depth expansion")
 	}
+	if strings.Contains(page, "#canvas-wrap{overflow:hidden}") {
+		t.Fatal("workbench page disables native graph scrolling")
+	}
+	styleResponse := httptest.NewRecorder()
+	app.Handler().ServeHTTP(styleResponse, httptest.NewRequest(http.MethodGet, "/style.css", nil))
+	if styleResponse.Code != http.StatusOK || !strings.Contains(styleResponse.Body.String(), "#canvas-wrap{height:calc(100% - 38px);overflow:auto") {
+		t.Fatal("workbench stylesheet does not enable graph overflow scrolling")
+	}
 	scriptResponse := httptest.NewRecorder()
 	app.Handler().ServeHTTP(scriptResponse, httptest.NewRequest(http.MethodGet, "/app.js", nil))
 	script := scriptResponse.Body.String()
-	for _, expected := range []string{"startDrag", "localStorage.setItem", "resetLayout", "flowmap-layout:", "focusGraph", "expandNode", "collapseNode", "pruneOrphanedExpansions", "zoomGraph", "startPan", "&depth=1"} {
+	for _, expected := range []string{"startDrag", "localStorage.setItem", "resetLayout", "flowmap-layout:", "focusGraph", "expandNode", "collapseNode", "pruneOrphanedExpansions", "zoomGraph", "startPan", "scrollLeft", "scrollTop", "zoomScale", "&depth=1"} {
 		if !strings.Contains(script, expected) {
 			t.Fatalf("workbench script omitted %s", expected)
 		}
