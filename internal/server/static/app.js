@@ -22,6 +22,36 @@ function node(tag, cls, text) {
   return value;
 }
 
+const goKeywords = new Set([
+  "break", "case", "chan", "const", "continue", "default", "defer", "else", "fallthrough", "for", "func", "go", "goto", "if", "import", "interface", "map", "package", "range", "return", "select", "struct", "switch", "type", "var"
+]);
+const goBuiltins = new Set([
+  "any", "append", "bool", "byte", "cap", "clear", "close", "comparable", "complex", "complex64", "complex128", "copy", "delete", "error", "false", "float32", "float64", "imag", "int", "int8", "int16", "int32", "int64", "iota", "len", "make", "max", "min", "new", "nil", "panic", "print", "println", "real", "recover", "rune", "string", "true", "uint", "uint8", "uint16", "uint32", "uint64", "uintptr"
+]);
+
+// highlightGo tokenizes into text nodes so source remains safe without an HTML sanitizer.
+function highlightGo(source) {
+  const code = node("code", "language-go");
+  const tokenPattern = /\/\/[^\n]*|\/\*[\s\S]*?\*\/|`[^`]*`|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|(?:0[xX][0-9a-fA-F](?:_?[0-9a-fA-F])*|0[bB][01](?:_?[01])*|0[oO][0-7](?:_?[0-7])*|(?:\d(?:_?\d)*\.\d(?:_?\d)*|\.\d(?:_?\d)*|\d(?:_?\d)*)(?:[eE][+-]?\d(?:_?\d)*)?i?)|[A-Za-z_]\w*|\s+|./g;
+  for (const match of source.matchAll(tokenPattern)) {
+    const token = match[0];
+    let kind = "";
+    if (token.startsWith("//") || token.startsWith("/*")) kind = "comment";
+    else if (token[0] === '"' || token[0] === "'" || token[0] === "`") kind = "string";
+    else if (/^(?:\d|\.\d)/.test(token)) kind = "number";
+    else if (goKeywords.has(token)) kind = "keyword";
+    else if (goBuiltins.has(token)) kind = "builtin";
+    code.append(kind ? node("span", "token " + kind, token) : document.createTextNode(token));
+  }
+  return code;
+}
+
+function sourceBlock(source) {
+  const pre = node("pre", "source-code");
+  pre.append(highlightGo(source));
+  return pre;
+}
+
 async function json(url, options) {
   const response = await fetch(url, options);
   const value = await response.json();
@@ -449,6 +479,6 @@ async function showDetail(id) {
   item.contracts.forEach(contract => { const card = node("div", "contract"); card.append(node("b", "", contract.name + " · " + contract.kind)); (contract.fields || []).forEach(field => card.append(node("div", "muted", field.name + " " + field.type))); (contract.methods || []).forEach(method => card.append(node("div", "muted", method))); content.append(card); });
   content.append(node("h3", "", "Classification evidence"));
   item.classification.evidence.forEach(evidence => content.append(node("div", "muted", "• " + evidence)));
-  content.append(node("h3", "", "Source"), node("pre", "", item.source));
+  content.append(node("h3", "", "Source"), sourceBlock(item.source));
   $("detail").classList.remove("hidden");
 }

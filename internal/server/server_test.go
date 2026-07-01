@@ -57,9 +57,14 @@ func TestHandlerServesNavigableGraphViews(t *testing.T) {
 	scriptResponse := httptest.NewRecorder()
 	app.Handler().ServeHTTP(scriptResponse, httptest.NewRequest(http.MethodGet, "/app.js", nil))
 	script := scriptResponse.Body.String()
-	for _, expected := range []string{"startDrag", "localStorage.setItem", "resetLayout", "flowmap-layout:", "focusGraph", "expandNode", "collapseNode", "pruneOrphanedExpansions", "zoomGraph", "startPan", "scrollLeft", "scrollTop", "zoomScale", "&depth=1"} {
+	for _, expected := range []string{"startDrag", "localStorage.setItem", "resetLayout", "flowmap-layout:", "focusGraph", "expandNode", "collapseNode", "pruneOrphanedExpansions", "zoomGraph", "startPan", "scrollLeft", "scrollTop", "zoomScale", "&depth=1", "highlightGo", "sourceBlock(item.source)"} {
 		if !strings.Contains(script, expected) {
 			t.Fatalf("workbench script omitted %s", expected)
+		}
+	}
+	for _, expected := range []string{".token.comment", ".token.keyword", ".token.builtin", ".token.string", ".token.number"} {
+		if !strings.Contains(styleResponse.Body.String(), expected) {
+			t.Fatalf("workbench stylesheet omitted %s", expected)
 		}
 	}
 }
