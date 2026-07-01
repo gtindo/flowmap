@@ -6,6 +6,10 @@ Flowmap performs static analysis. An edge means a function may call another func
 
 The current online version of this guide is published at <https://gtindo.github.io/flowmap/>.
 
+## Download Flowmap
+
+[Download the latest Flowmap release](https://github.com/gtindo/flowmap/releases/latest) or browse the [complete GitHub Releases history](https://github.com/gtindo/flowmap/releases) for older versions, release notes, platform archives, and checksum manifests.
+
 ## Requirements
 
 - macOS on Apple Silicon or Intel, or Linux on AMD64.
