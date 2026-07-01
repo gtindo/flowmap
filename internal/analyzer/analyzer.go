@@ -41,6 +41,9 @@ func Analyze(ctx context.Context, config Config) (*Index, error) {
 	if err != nil {
 		return nil, fmt.Errorf("resolve analysis root: %w", err)
 	}
+	if err := checkActiveToolchain(ctx, root); err != nil {
+		return nil, err
+	}
 	buildFlags := make([]string, 0, 1)
 	if len(config.BuildTags) > 0 {
 		buildFlags = append(buildFlags, "-tags="+strings.Join(config.BuildTags, ","))

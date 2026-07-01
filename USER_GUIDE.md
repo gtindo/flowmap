@@ -13,7 +13,7 @@ The current online version of this guide is published at <https://gtindo.github.
 ## Requirements
 
 - macOS on Apple Silicon or Intel, or Linux on AMD64.
-- A local Go toolchain available through `go` on `PATH`. Flowmap uses it to load and type-check the target module.
+- Go 1.24, 1.25, or 1.26 available through `go` on `PATH`. Flowmap uses this active toolchain to load and type-check the target module. Published Flowmap binaries are built with Go 1.26 and can read export data produced by these supported versions.
 - Access to the target module dependencies. Already-cached dependencies work offline; otherwise the Go toolchain may need network access.
 - A modern web browser.
 
@@ -144,6 +144,12 @@ Review an adapter before using it: it determines whether source stays local or i
 - Run the reproduction command printed by Flowmap and resolve its reported errors.
 - Confirm the required Go version is installed.
 
+### The active Go toolchain is newer than Flowmap
+
+The `go` executable on `PATH` determines the compiled export-data version that Flowmap must read. This is distinct from the `go` directive in the target module's `go.mod`: for example, Go 1.26 can produce Go 1.26 export data while loading a module whose directive says `go 1.24`.
+
+This release supports active Go toolchains from Go 1.24 through Go 1.26. If `go env GOVERSION` reports Go 1.27 or newer, install a Flowmap release built with that Go version. Go 1.23 and older are not supported.
+
 Flowmap tolerates individual broken packages when healthy neighboring packages can still be loaded. It prints a warning with deduplicated `go list`, syntax, and type diagnostics for omitted package variants. If every package is broken, indexing stops and prints the same diagnostic report. Flowmap shows up to ten unique errors and reports how many additional errors were omitted from the display.
 
 ### Dependencies cannot be loaded
@@ -167,6 +173,8 @@ Choose another loopback address:
 ```
 
 ## Build from source
+
+Building Flowmap from source requires Go 1.25 or newer. The lower source-build requirement is intentionally separate from the Go 1.26 toolchain used for published release binaries.
 
 ```sh
 make test

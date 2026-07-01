@@ -47,6 +47,8 @@ Generation happens only when you press **Generate fallback intent**. Results are
 
 ## Develop
 
+Building Flowmap from source requires Go 1.25 or newer. Published binaries are built with Go 1.26 and support projects loaded by Go 1.24 through Go 1.26; see the user guide for the distinction between a module's `go` directive and its active toolchain.
+
 ```sh
 go test ./...
 go build ./cmd/flowmap

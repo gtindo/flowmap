@@ -1,0 +1,60 @@
+name: Go Compatibility
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  source:
+    name: Source build (Go ${{ matrix.go }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        go: ["1.25.x", "1.26.x"]
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: ${{ matrix.go }}
+          cache-dependency-path: go.sum
+
+      - name: Test
+        run: go test ./...
+
+  analyzer:
+    name: Go 1.26 binary with Go ${{ matrix.go }} project toolchain
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        go: ["1.24.x", "1.25.x", "1.26.x"]
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+
+      - name: Set up release Go toolchain
+        uses: actions/setup-go@v6
+        with:
+          go-version: "1.26.x"
+          cache-dependency-path: go.sum
+
+      - name: Build release-equivalent binary
+        run: go build -trimpath -o "${RUNNER_TEMP}/flowmap" ./cmd/flowmap
+
+      - name: Set up project Go toolchain
+        uses: actions/setup-go@v6
+        with:
+          go-version: ${{ matrix.go }}
+          cache: false
+
+      - name: Analyze Go 1.24 fixture
+        run: scripts/compatibility-smoke.sh "${RUNNER_TEMP}/flowmap" internal/analyzer/testdata/compatibility

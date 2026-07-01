@@ -22,7 +22,10 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
-          go-version-file: go.mod
+          # Release binaries must be at least as new as every Go toolchain
+          # they officially support. Keep this independent from go.mod, which
+          # records the minimum version needed to build Flowmap from source.
+          go-version: "1.26.x"
           cache-dependency-path: go.sum
 
       - name: Build and verify release
