@@ -9,11 +9,14 @@ let currentSize = { width: 255, height: 110 };
 let activeDrag;
 let activePan;
 let suppressClick = false;
+const pointerMoveThreshold = 4;
 let zoomScale = 1;
 let contentBounds = { width: 900, height: 600 };
 let expandedNodes = new Set();
 let expansionRecords = new Map();
 let baseRootNode;
+let detailGeneration = 0;
+let detailController;
 
 function node(tag, cls, text) {
   const value = document.createElement(tag);
@@ -70,7 +73,7 @@ $("zoom-out").addEventListener("click", () => zoomGraph(1.25));
 $("fit-graph").addEventListener("click", fitGraph);
 $("hand-tool").addEventListener("click", toggleHandTool);
 $("canvas").addEventListener("pointerdown", startPan);
-$("close").onclick = () => $("detail").classList.add("hidden");
+$("close").onclick = hideDetail;
 document.addEventListener("click", event => { if (!event.target.closest(".search-wrap")) hideResults(); });
 document.addEventListener("pointermove", movePointer);
 document.addEventListener("pointerup", finishPointer);
@@ -121,7 +124,7 @@ function focusGraph(id, qualifiedName) {
   rootID = id;
   if (qualifiedName) $("search").value = qualifiedName;
   hideResults();
-  $("detail").classList.add("hidden");
+  hideDetail();
   expandedNodes = new Set();
   expansionRecords = new Map();
   baseRootNode = undefined;
@@ -342,8 +345,11 @@ function startDrag(event, id, group) {
 
 function dragNode(event) {
   if (!activeDrag) return;
-  const x = Math.max(10, activeDrag.originX + (event.clientX - activeDrag.startX) / zoomScale);
-  const y = Math.max(10, activeDrag.originY + (event.clientY - activeDrag.startY) / zoomScale);
+  const deltaX = event.clientX - activeDrag.startX;
+  const deltaY = event.clientY - activeDrag.startY;
+  if (!activeDrag.moved && Math.hypot(deltaX, deltaY) < pointerMoveThreshold) return;
+  const x = Math.max(10, activeDrag.originX + deltaX / zoomScale);
+  const y = Math.max(10, activeDrag.originY + deltaY / zoomScale);
   activeDrag.moved = true;
   currentPositions.set(activeDrag.id, { x, y });
   activeDrag.group.setAttribute("transform", "translate(" + x + " " + y + ")");
@@ -398,9 +404,10 @@ function panGraph(event) {
   const wrap = $("canvas-wrap");
   const deltaX = event.clientX - activePan.startX;
   const deltaY = event.clientY - activePan.startY;
+  if (!activePan.moved && Math.hypot(deltaX, deltaY) < pointerMoveThreshold) return;
+  activePan.moved = true;
   wrap.scrollLeft = activePan.originX - deltaX;
   wrap.scrollTop = activePan.originY - deltaY;
-  activePan.moved = activePan.moved || deltaX !== 0 || deltaY !== 0;
 }
 
 function zoomGraph(factor) {
@@ -456,8 +463,34 @@ function resetLayout() {
   if (currentGraph) render(currentGraph, true);
 }
 
+function hideDetail() {
+  detailGeneration++;
+  if (detailController) detailController.abort();
+  detailController = undefined;
+  $("detail").classList.add("hidden");
+}
+
 async function showDetail(id) {
-  const item = await json("/api/functions/" + encodeURIComponent(id));
+  if (detailController) detailController.abort();
+  const generation = ++detailGeneration;
+  const controller = new AbortController();
+  detailController = controller;
+  const content = $("detail-content");
+  content.replaceChildren(node("p", "muted", "Loading details…"));
+  $("detail").classList.remove("hidden");
+  try {
+    const item = await json("/api/functions/" + encodeURIComponent(id), { signal: controller.signal });
+    if (generation !== detailGeneration) return;
+    renderDetail(item);
+  } catch (error) {
+    if (generation !== detailGeneration || error.name === "AbortError") return;
+    content.replaceChildren(node("h2", "", "Unable to load details"), node("p", "muted", error.message));
+  } finally {
+    if (detailController === controller) detailController = undefined;
+  }
+}
+
+function renderDetail(item) {
   const content = $("detail-content");
   content.replaceChildren();
   content.append(node("h2", "", item.qualified_name));
@@ -474,11 +507,11 @@ async function showDetail(id) {
   actions.append(focusButton, expandButton);
   content.append(badges, node("p", "muted", item.file + ":" + item.line), actions, node("h3", "", "Intent"), node("p", "intent", item.intent || "No authored intent."));
   const button = node("button", "generate", "Generate fallback intent");
-  button.onclick = async () => { button.disabled = true; try { const result = await json("/api/functions/" + encodeURIComponent(id) + "/summary", { method: "POST" }); button.before(node("p", "intent", result.summary)); button.remove(); } catch (error) { button.textContent = error.message; button.disabled = false; } };
+  button.onclick = async () => { button.disabled = true; try { const result = await json("/api/functions/" + encodeURIComponent(item.id) + "/summary", { method: "POST" }); button.before(node("p", "intent", result.summary)); button.remove(); } catch (error) { button.textContent = error.message; button.disabled = false; } };
   content.append(button, node("h3", "", "Contract"), node("pre", "", item.signature));
-  item.contracts.forEach(contract => { const card = node("div", "contract"); card.append(node("b", "", contract.name + " · " + contract.kind)); (contract.fields || []).forEach(field => card.append(node("div", "muted", field.name + " " + field.type))); (contract.methods || []).forEach(method => card.append(node("div", "muted", method))); content.append(card); });
+  (item.contracts || []).forEach(contract => { const card = node("div", "contract"); card.append(node("b", "", contract.name + " · " + contract.kind)); (contract.fields || []).forEach(field => card.append(node("div", "muted", field.name + " " + field.type))); (contract.methods || []).forEach(method => card.append(node("div", "muted", method))); content.append(card); });
   content.append(node("h3", "", "Classification evidence"));
-  item.classification.evidence.forEach(evidence => content.append(node("div", "muted", "• " + evidence)));
+  (item.classification.evidence || []).forEach(evidence => content.append(node("div", "muted", "• " + evidence)));
   content.append(node("h3", "", "Source"), sourceBlock(item.source));
   $("detail").classList.remove("hidden");
 }
