@@ -97,7 +97,7 @@ Nodes are draggable in both views. Layouts are saved in browser storage and kept
 - Graphs open at 100% scale. Use the horizontal and vertical scrollbars, a trackpad, or Shift+wheel to navigate an oversized graph.
 - Use **+** and **−** in the header to zoom the viewport.
 - Use **Fit** to show the complete current graph.
-- Enable **Hand** to drag the same scrollable canvas viewport.
+- Enable **Hand** to drag the same scrollable canvas viewport. The canvas includes one viewport of extra space beyond every edge, allowing nodes to be panned clear of the detail panel.
 - Disable **Hand** to resume dragging individual nodes.
 
 The small **+** or **−** attached to a function node controls graph expansion; the header buttons control zoom.

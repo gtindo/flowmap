@@ -13,6 +13,7 @@ const pointerMoveThreshold = 4;
 const expansionActivationWindow = 400;
 let zoomScale = 1;
 let contentBounds = { width: 900, height: 600 };
+let viewportState = { marginX: 0, marginY: 0, scale: 1 };
 let expandedNodes = new Set();
 let expansionRecords = new Map();
 let expansionActivationTimes = new Map();
@@ -251,11 +252,10 @@ function resizeCanvas(resetViewport = false) {
 function centerRootInViewport() {
   const position = currentGraph && currentPositions.get(currentGraph.root);
   if (!position) return;
-  const wrap = $("canvas-wrap");
-  wrap.scrollTo(
-    (position.x + currentSize.width / 2) * zoomScale - wrap.clientWidth / 2,
-    (position.y + currentSize.height / 2) * zoomScale - wrap.clientHeight / 2,
-  );
+  scrollViewportTo({
+    x: position.x + currentSize.width / 2,
+    y: position.y + currentSize.height / 2,
+  });
 }
 
 function normalizeLayout() {
@@ -496,21 +496,16 @@ function panGraph(event) {
 
 function zoomGraph(factor) {
   if (!currentGraph) return;
-  const wrap = $("canvas-wrap");
-  const centerX = (wrap.scrollLeft + wrap.clientWidth / 2) / zoomScale;
-  const centerY = (wrap.scrollTop + wrap.clientHeight / 2) / zoomScale;
   zoomScale = Math.min(4, Math.max(minimumZoom(), zoomScale / factor));
   applyViewport();
-  wrap.scrollLeft = centerX * zoomScale - wrap.clientWidth / 2;
-  wrap.scrollTop = centerY * zoomScale - wrap.clientHeight / 2;
 }
 
 function fitGraph() {
   if (!currentGraph) return;
   const wrap = $("canvas-wrap");
   zoomScale = Math.min(1, wrap.clientWidth / contentBounds.width, wrap.clientHeight / contentBounds.height);
-  applyViewport();
-  wrap.scrollTo(0, 0);
+  applyViewport(false);
+  scrollViewportTo({ x: contentBounds.width / 2, y: contentBounds.height / 2 });
 }
 
 function minimumZoom() {
@@ -518,14 +513,43 @@ function minimumZoom() {
   return Math.min(0.1, wrap.clientWidth / contentBounds.width, wrap.clientHeight / contentBounds.height);
 }
 
-function applyViewport() {
+function viewportCenter() {
+  const wrap = $("canvas-wrap");
+  return {
+    x: (wrap.scrollLeft + wrap.clientWidth / 2 - viewportState.marginX) / viewportState.scale,
+    y: (wrap.scrollTop + wrap.clientHeight / 2 - viewportState.marginY) / viewportState.scale,
+  };
+}
+
+function scrollViewportTo(center) {
+  const wrap = $("canvas-wrap");
+  wrap.scrollTo(
+    viewportState.marginX + center.x * viewportState.scale - wrap.clientWidth / 2,
+    viewportState.marginY + center.y * viewportState.scale - wrap.clientHeight / 2,
+  );
+}
+
+function applyViewport(preserveCenter = true) {
   const wrap = $("canvas-wrap");
   const canvas = $("canvas");
-  const width = Math.max(wrap.clientWidth, contentBounds.width * zoomScale);
-  const height = Math.max(wrap.clientHeight, contentBounds.height * zoomScale);
+  const center = preserveCenter ? viewportCenter() : undefined;
+  // Force overflow first so the final margins use the viewport after scrollbars appear.
+  canvas.style.width = contentBounds.width * zoomScale + wrap.clientWidth * 2 + "px";
+  canvas.style.height = contentBounds.height * zoomScale + wrap.clientHeight * 2 + "px";
+  const marginX = wrap.clientWidth;
+  const marginY = wrap.clientHeight;
+  const width = contentBounds.width * zoomScale + marginX * 2;
+  const height = contentBounds.height * zoomScale + marginY * 2;
   canvas.style.width = width + "px";
   canvas.style.height = height + "px";
-  canvas.setAttribute("viewBox", "0 0 " + width / zoomScale + " " + height / zoomScale);
+  canvas.setAttribute("viewBox", [
+    -marginX / zoomScale,
+    -marginY / zoomScale,
+    width / zoomScale,
+    height / zoomScale,
+  ].join(" "));
+  viewportState = { marginX, marginY, scale: zoomScale };
+  if (center) scrollViewportTo(center);
 }
 
 function layoutKey() {
