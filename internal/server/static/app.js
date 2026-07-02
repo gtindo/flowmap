@@ -3,6 +3,9 @@ const $ = id => document.getElementById(id);
 let rootID = "";
 let timer;
 let searchGeneration = 0;
+let graphGeneration = 0;
+let focusHistory = [];
+let focusHistoryIndex = -1;
 let currentGraph;
 let currentPositions = new Map();
 let currentSize = { width: 255, height: 110 };
@@ -127,6 +130,8 @@ $("search").addEventListener("input", () => { clearTimeout(timer); timer = setTi
 $("search").addEventListener("keydown", event => { if (event.key === "Escape") hideResults(); });
 $("tests").addEventListener("change", () => rootID ? loadGraph() : search());
 $("direction").addEventListener("change", loadGraph);
+$("history-back").addEventListener("click", () => navigateHistory(-1));
+$("history-forward").addEventListener("click", () => navigateHistory(1));
 $("view").addEventListener("change", () => { if (currentGraph) render(currentGraph, true); });
 $("reset-layout").addEventListener("click", resetLayout);
 $("zoom-in").addEventListener("click", () => zoomGraph(0.8));
@@ -173,11 +178,15 @@ async function search() {
 
 async function loadGraph() {
   if (!rootID) return;
+  const generation = ++graphGeneration;
   const url = graphURL(rootID);
   try {
     const graph = await json(url);
+    if (generation !== graphGeneration) return;
     showLoadedGraph(graph);
-  } catch (error) { alert(error.message); }
+  } catch (error) {
+    if (generation === graphGeneration) alert(error.message);
+  }
 }
 
 function showLoadedGraph(graph) {
@@ -190,6 +199,7 @@ function showLoadedGraph(graph) {
 }
 
 function showEmptyAfterRescan() {
+  graphGeneration++;
   rootID = "";
   currentGraph = undefined;
   baseRootNode = undefined;
@@ -201,6 +211,7 @@ function showEmptyAfterRescan() {
   $("empty").querySelector("h1").textContent = "That function is no longer in the codebase.";
   $("empty").querySelector("p").textContent = "Search for another function to begin a refreshed graph.";
   $("search").focus();
+  updateHistoryButtons();
 }
 
 async function rescanCodebase() {
@@ -236,15 +247,47 @@ function graphURL(id) {
   return "/api/graph?root=" + encodeURIComponent(id) + "&direction=" + $("direction").value + "&depth=1&tests=" + $("tests").checked;
 }
 
-function focusGraph(id, qualifiedName) {
-  rootID = id;
-  if (qualifiedName) $("search").value = qualifiedName;
+async function focusGraph(id, qualifiedName, options = {}) {
+  if (!options.historyIndex && options.historyIndex !== 0 && id === rootID) {
+    if (qualifiedName) $("search").value = qualifiedName;
+    hideResults();
+    return;
+  }
   hideResults();
-  hideDetail();
-  expandedNodes = new Set();
-  expansionRecords = new Map();
-  baseRootNode = undefined;
-  loadGraph();
+  const generation = ++graphGeneration;
+  try {
+    const graph = await json(graphURL(id));
+    if (generation !== graphGeneration) return;
+    rootID = id;
+    if (qualifiedName) $("search").value = qualifiedName;
+    hideDetail();
+    expandedNodes = new Set();
+    expansionRecords = new Map();
+    baseRootNode = undefined;
+    showLoadedGraph(graph);
+    if (options.historyIndex || options.historyIndex === 0) {
+      focusHistoryIndex = options.historyIndex;
+    } else {
+      focusHistory = focusHistory.slice(0, focusHistoryIndex + 1);
+      focusHistory.push({ id, qualifiedName: qualifiedName || graph.nodes.find(item => item.id === id)?.qualified_name || id });
+      focusHistoryIndex = focusHistory.length - 1;
+    }
+    updateHistoryButtons();
+  } catch (error) {
+    if (generation === graphGeneration) alert(error.message);
+  }
+}
+
+function navigateHistory(offset) {
+  const targetIndex = focusHistoryIndex + offset;
+  if (targetIndex < 0 || targetIndex >= focusHistory.length) return;
+  const target = focusHistory[targetIndex];
+  focusGraph(target.id, target.qualifiedName, { historyIndex: targetIndex });
+}
+
+function updateHistoryButtons() {
+  $("history-back").disabled = focusHistoryIndex <= 0;
+  $("history-forward").disabled = focusHistoryIndex < 0 || focusHistoryIndex >= focusHistory.length - 1;
 }
 
 function edgeKey(edge) {
@@ -442,11 +485,6 @@ function drawNode(item, position, isRoot, simple) {
   }
   group.addEventListener("pointerdown", event => startDrag(event, item.id, group));
   group.onclick = () => { if (!suppressClick) showDetail(item.id); };
-  group.ondblclick = event => {
-    event.stopPropagation();
-    if (event.target.closest(".expand-control")) return;
-    if (!$("hand-tool").classList.contains("active")) focusGraph(item.id, item.qualified_name);
-  };
   addExpansionControl(group, item.id);
   $("nodes").append(group);
 }

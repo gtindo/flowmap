@@ -19,7 +19,7 @@ Tests are indexed but hidden until the **Tests** toggle is enabled. Anonymous fu
 ## Navigate the graph
 
 - A new focus starts with one hop. Use the **+** control on any node to expand only that function by one additional hop. The control becomes **−** after expansion; collapsing it removes any now-unreachable expanded subtree while preserving nodes still supplied by another path.
-- Click a node to inspect it, then choose **Focus graph here** to make it the new root. Double-clicking a node performs the same action.
+- Click a node to inspect it, then choose **Focus graph here** to make it the new root.
 - Choose **Extended** for contracts and intent or **Simplified** for compact function-name nodes. Nodes are draggable in both views and their layouts are saved separately in browser storage.
 - Graphs open at a readable 100% scale. Use the scrollbars, a trackpad, or Shift+wheel to move through an oversized graph. Use **+**, **−**, and **Fit** for zoom; **Hand** provides drag-to-scroll navigation with a viewport of extra room beyond every graph edge, so nodes can be moved clear of the detail panel. Disable it to resume node dragging.
 - **Reset layout** clears saved positions for the current root, direction, test setting, and view.

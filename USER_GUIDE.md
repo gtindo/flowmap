@@ -86,7 +86,8 @@ Flowmap continues serving the last successful scan while the new one is built. I
 ## Navigate and expand
 
 - Select a node to open its detail panel.
-- Choose **Focus graph here** to make that function the new root. Double-clicking a node does the same thing.
+- Choose **Focus graph here** to make that function the new root.
+- Use the header’s **Back** and **Forward** controls to revisit functions opened from search results or the detail panel. Navigation keeps the current direction, test visibility, and view mode while resetting transient expansions and viewport state.
 - Select the node’s **+** control to expand only that function by one hop.
 - After expansion, the control becomes **−**. Selecting it removes that expansion and any descendant expansions that are no longer reachable. Nodes still supplied by another expanded path remain visible.
 
