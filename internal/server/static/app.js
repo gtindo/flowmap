@@ -10,10 +10,12 @@ let activeDrag;
 let activePan;
 let suppressClick = false;
 const pointerMoveThreshold = 4;
+const expansionActivationWindow = 400;
 let zoomScale = 1;
 let contentBounds = { width: 900, height: 600 };
 let expandedNodes = new Set();
 let expansionRecords = new Map();
+let expansionActivationTimes = new Map();
 let baseRootNode;
 let detailGeneration = 0;
 let detailController;
@@ -272,7 +274,11 @@ function drawNode(item, position, isRoot, simple) {
   }
   group.addEventListener("pointerdown", event => startDrag(event, item.id, group));
   group.onclick = () => { if (!suppressClick) showDetail(item.id); };
-  group.ondblclick = event => { event.stopPropagation(); if (!$("hand-tool").classList.contains("active")) focusGraph(item.id, item.qualified_name); };
+  group.ondblclick = event => {
+    event.stopPropagation();
+    if (event.target.closest(".expand-control")) return;
+    if (!$("hand-tool").classList.contains("active")) focusGraph(item.id, item.qualified_name);
+  };
   addExpansionControl(group, item.id);
   $("nodes").append(group);
 }
@@ -290,7 +296,14 @@ function addExpansionControl(group, id) {
   title.textContent = isExpanded ? "Collapse this expansion" : "Expand this function by one hop";
   control.append(title, circle, plus);
   control.addEventListener("pointerdown", event => event.stopPropagation());
-  control.addEventListener("click", event => { event.stopPropagation(); isExpanded ? collapseNode(id) : expandNode(id); });
+  control.addEventListener("dblclick", event => event.stopPropagation());
+  control.addEventListener("click", event => {
+    event.stopPropagation();
+    const now = Date.now();
+    if (now - (expansionActivationTimes.get(id) || 0) < expansionActivationWindow) return;
+    expansionActivationTimes.set(id, now);
+    isExpanded ? collapseNode(id) : expandNode(id);
+  });
   group.append(control);
 }
 
