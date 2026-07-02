@@ -24,6 +24,7 @@ Tests are indexed but hidden until the **Tests** toggle is enabled. Anonymous fu
 - Graphs open at a readable 100% scale. Use the scrollbars, a trackpad, or Shift+wheel to move through an oversized graph. Use **+**, **−**, and **Fit** for zoom; **Hand** provides drag-to-scroll navigation with a viewport of extra room beyond every graph edge, so nodes can be moved clear of the detail panel. Disable it to resume node dragging.
 - **Reset layout** clears saved positions for the current root, direction, test setting, and view.
 - **Rescan codebase** rebuilds the analysis after source changes without restarting Flowmap. The current graph refreshes when its root still exists; otherwise Flowmap returns to function search. A failed rescan leaves the last successful graph available.
+- When the module belongs to a Git repository, the header shows the branch captured by the current scan. **Changes** lists functions that differ from `HEAD`, including staged, unstaged, and non-ignored untracked work; changed-function details can switch their source viewer to a unified diff.
 
 ## Classification
 
@@ -44,6 +45,7 @@ Generation happens only when you press **Generate fallback intent**. Results are
 - `GET /api/search?q=<text>&tests=<bool>`
 - `GET /api/graph?root=<id>&direction=<upstream|downstream|both>&depth=<0..8>&tests=<bool>`
 - `GET /api/functions/<id>`
+- `GET /api/git-status`
 - `POST /api/functions/<id>/summary`
 - `POST /api/rescan`
 

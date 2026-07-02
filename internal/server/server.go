@@ -33,8 +33,9 @@ type App struct {
 
 // RescanResult describes a newly installed analysis index.
 type RescanResult struct {
-	FunctionCount int                 `json:"function_count"`
-	LoadReport    analyzer.LoadReport `json:"load_report"`
+	FunctionCount int                  `json:"function_count"`
+	LoadReport    analyzer.LoadReport  `json:"load_report"`
+	GitStatus     analyzer.GitSnapshot `json:"git_status"`
 }
 
 // New creates a local workbench handler without starting network I/O.
@@ -65,11 +66,17 @@ func (app *App) Handler() http.Handler {
 	mux.HandleFunc("GET /api/search", app.handleSearch)
 	mux.HandleFunc("GET /api/graph", app.handleGraph)
 	mux.HandleFunc("GET /api/functions/{id}", app.handleFunction)
+	mux.HandleFunc("GET /api/git-status", app.handleGitStatus)
 	mux.HandleFunc("POST /api/functions/{id}/summary", app.handleSummary)
 	mux.HandleFunc("POST /api/rescan", app.handleRescan)
 	assets, _ := fs.Sub(staticFiles, "static")
 	mux.Handle("/", http.FileServer(http.FS(assets)))
 	return mux
+}
+
+// handleGitStatus returns the repository state captured by the active scan.
+func (app *App) handleGitStatus(response http.ResponseWriter, _ *http.Request) {
+	writeJSON(response, http.StatusOK, app.index.Load().Git)
 }
 
 // Listen starts the imperative HTTP edge and shuts it down with ctx.
@@ -166,7 +173,7 @@ func (app *App) handleRescan(response http.ResponseWriter, request *http.Request
 		return
 	}
 	app.index.Store(index)
-	writeJSON(response, http.StatusOK, RescanResult{FunctionCount: len(index.Functions), LoadReport: index.LoadReport})
+	writeJSON(response, http.StatusOK, RescanResult{FunctionCount: len(index.Functions), LoadReport: index.LoadReport, GitStatus: index.Git})
 }
 
 // writeJSON sends one JSON response with a stable content type.

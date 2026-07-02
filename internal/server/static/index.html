@@ -58,6 +58,11 @@
       </div>
 
       <div class="control-group utilities" aria-label="Utilities">
+        <div id="git-review" class="git-review hidden">
+          <span id="git-branch" class="branch-chip" title="Branch captured by the current scan"></span>
+          <button id="changes-button" class="text-button" aria-haspopup="true" aria-expanded="false">Changes 0</button>
+          <div id="changes-menu" class="changes-menu hidden" role="menu" aria-label="Changed functions"></div>
+        </div>
         <button id="rescan" class="text-button" title="Rebuild the codebase scan">Rescan codebase</button>
         <label class="theme-control"><span class="sr-only">Theme</span><select id="theme" title="Color theme" aria-label="Color theme"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select></label>
       </div>

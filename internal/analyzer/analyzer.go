@@ -101,6 +101,7 @@ func Analyze(ctx context.Context, config Config) (*Index, error) {
 		index.Outgoing[edge.CallerID] = append(index.Outgoing[edge.CallerID], edge)
 		index.Incoming[edge.CalleeID] = append(index.Incoming[edge.CalleeID], edge)
 	}
+	index.Git = captureGitSnapshot(ctx, root, index.Functions)
 	return index, nil
 }
 

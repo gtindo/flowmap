@@ -25,6 +25,7 @@ let detailGeneration = 0;
 let detailController;
 let activeDetailID;
 let activeDetailResize;
+let gitSnapshot;
 const detailWidthKey = "flowmap-detail-width:v1";
 const themePreferenceKey = "flowmap-theme:v1";
 const themePreferences = new Set(["system", "light", "dark"]);
@@ -67,6 +68,21 @@ function highlightGo(source) {
 function sourceBlock(source) {
   const pre = node("pre", "source-code");
   pre.append(highlightGo(source));
+  return pre;
+}
+
+function diffBlock(diff) {
+  const pre = node("pre", "diff-code");
+  const code = node("code");
+  diff.replace(/\n$/, "").split("\n").forEach(line => {
+    let kind = "diff-context";
+    if (line.startsWith("@@")) kind = "diff-hunk";
+    else if (line.startsWith("+++ ") || line.startsWith("--- ")) kind = "diff-meta";
+    else if (line.startsWith("+")) kind = "diff-addition";
+    else if (line.startsWith("-")) kind = "diff-deletion";
+    code.append(node("span", kind, line + "\n"));
+  });
+  pre.append(code);
   return pre;
 }
 
@@ -145,6 +161,7 @@ async function json(url, options) {
 }
 
 const rescanButton = $("rescan");
+const changesButton = $("changes-button");
 const themeSelect = $("theme");
 const themePreference = readThemePreference();
 themeSelect.value = themePreference;
@@ -154,9 +171,13 @@ systemTheme.addEventListener("change", () => {
   if (readThemePreference() === "system") applyTheme("system");
 });
 rescanButton.addEventListener("click", rescanCodebase);
+changesButton.addEventListener("click", toggleChangesMenu);
 $("search").addEventListener("input", () => { clearTimeout(timer); timer = setTimeout(search, 150); });
 $("search").addEventListener("keydown", event => { if (event.key === "Escape") hideResults(); });
-$("tests").addEventListener("change", () => rootID ? loadGraph() : search());
+$("tests").addEventListener("change", () => {
+  renderGitStatus();
+  rootID ? loadGraph() : search();
+});
 $("direction").addEventListener("change", loadGraph);
 $("history-back").addEventListener("click", () => navigateHistory(-1));
 $("history-forward").addEventListener("click", () => navigateHistory(1));
@@ -172,7 +193,11 @@ $("detail-resize").addEventListener("pointermove", resizeDetail);
 $("detail-resize").addEventListener("pointerup", finishDetailResize);
 $("detail-resize").addEventListener("pointercancel", finishDetailResize);
 $("close").onclick = hideDetail;
-document.addEventListener("click", event => { if (!event.target.closest(".search-wrap")) hideResults(); });
+document.addEventListener("click", event => {
+  if (!event.target.closest(".search-wrap")) hideResults();
+  if (!event.target.closest(".git-review")) hideChangesMenu();
+});
+document.addEventListener("keydown", event => { if (event.key === "Escape") hideChangesMenu(); });
 document.addEventListener("pointermove", movePointer);
 document.addEventListener("pointerup", finishPointer);
 window.addEventListener("resize", () => {
@@ -180,6 +205,71 @@ window.addEventListener("resize", () => {
   if (currentGraph) applyViewport();
 });
 applyDetailWidth(preferredDetailWidth);
+loadGitStatus();
+
+async function loadGitStatus() {
+  try {
+    gitSnapshot = await json("/api/git-status");
+    renderGitStatus();
+  } catch (_) {
+    gitSnapshot = undefined;
+    renderGitStatus();
+  }
+}
+
+function visibleChangedFunctions() {
+  if (!gitSnapshot) return [];
+  const includeTests = $("tests").checked;
+  return (gitSnapshot.changed_functions || []).filter(item => includeTests || !item.test);
+}
+
+function renderGitStatus(status) {
+  if (status) gitSnapshot = status;
+  const review = $("git-review");
+  if (!gitSnapshot || !gitSnapshot.available) {
+    review.classList.add("hidden");
+    hideChangesMenu();
+    return;
+  }
+  const revision = (gitSnapshot.revision || "").slice(0, 7);
+  $("git-branch").textContent = gitSnapshot.detached ? `detached @ ${revision}` : (gitSnapshot.branch || "unborn branch");
+  const changes = visibleChangedFunctions();
+  changesButton.textContent = `Changes ${changes.length}`;
+  const menu = $("changes-menu");
+  menu.replaceChildren();
+  if (changes.length === 0) {
+    menu.append(node("p", "changes-empty", "No changed functions in this view."));
+  } else {
+    changes.forEach(item => {
+      const row = node("button", "change-item");
+      row.type = "button";
+      row.setAttribute("role", "menuitem");
+      const title = node("span", "change-name", item.qualified_name);
+      const metadata = node("span", "change-metadata");
+      metadata.append(node("span", "change-kind " + item.kind, item.kind), document.createTextNode(" " + item.package + " · " + item.file.split(/[\\/]/).pop() + ":" + item.line));
+      row.append(title, metadata);
+      row.onclick = async () => {
+        hideChangesMenu();
+        await focusGraph(item.id, item.qualified_name);
+        showDetail(item.id);
+      };
+      menu.append(row);
+    });
+  }
+  review.classList.remove("hidden");
+}
+
+function toggleChangesMenu() {
+  const menu = $("changes-menu");
+  const open = menu.classList.contains("hidden");
+  menu.classList.toggle("hidden", !open);
+  changesButton.setAttribute("aria-expanded", String(open));
+}
+
+function hideChangesMenu() {
+  $("changes-menu").classList.add("hidden");
+  changesButton.setAttribute("aria-expanded", "false");
+}
 
 function hideResults() {
   searchGeneration++;
@@ -248,6 +338,7 @@ async function rescanCodebase() {
   rescanButton.textContent = "Scanning…";
   try {
     const result = await json("/api/rescan", { method: "POST" });
+    renderGitStatus(result.git_status);
     hideDetail();
     hideResults();
     if (rootID) {
@@ -791,6 +882,7 @@ function renderDetail(item) {
   content.append(node("h2", "", item.qualified_name));
   const badges = node("div");
   badges.append(node("span", "badge " + item.classification.kind, item.classification.kind), node("span", "muted", " " + item.classification.provenance));
+  if (item.change) badges.append(node("span", "badge change-badge " + item.change.kind, item.change.kind));
   const actions = node("div", "detail-actions");
   const focusButton = node("button", "", "Focus graph here");
   focusButton.onclick = () => focusGraph(item.id, item.qualified_name);
@@ -807,6 +899,25 @@ function renderDetail(item) {
   (item.contracts || []).forEach(contract => { const card = node("div", "contract"); card.append(node("b", "", contract.name + " · " + contract.kind)); (contract.fields || []).forEach(field => card.append(node("div", "muted", field.name + " " + field.type))); (contract.methods || []).forEach(method => card.append(node("div", "muted", method))); content.append(card); });
   content.append(node("h3", "", "Classification evidence"));
   (item.classification.evidence || []).forEach(evidence => content.append(node("div", "muted", "• " + evidence)));
-  content.append(node("h3", "", "Source"), sourceBlock(item.source));
+  const sourceHeading = node("div", "source-heading");
+  sourceHeading.append(node("h3", "", "Source"));
+  const source = sourceBlock(item.source);
+  content.append(sourceHeading, source);
+  if (item.change) {
+    const toggle = node("button", "diff-toggle", "Show diff");
+    toggle.type = "button";
+    toggle.setAttribute("aria-pressed", "false");
+    sourceHeading.append(toggle);
+    const diff = diffBlock(item.change.diff);
+    diff.classList.add("hidden");
+    content.append(diff);
+    toggle.onclick = () => {
+      const showingDiff = toggle.getAttribute("aria-pressed") !== "true";
+      toggle.setAttribute("aria-pressed", String(showingDiff));
+      toggle.textContent = showingDiff ? "Show source" : "Show diff";
+      source.classList.toggle("hidden", showingDiff);
+      diff.classList.toggle("hidden", !showingDiff);
+    };
+  }
   $("detail").classList.remove("hidden");
 }

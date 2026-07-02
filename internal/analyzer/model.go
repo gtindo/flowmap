@@ -22,24 +22,51 @@ type Contract struct {
 	Methods []string `json:"methods,omitempty"`
 }
 
+// FunctionChange describes one current function's local difference from HEAD.
+type FunctionChange struct {
+	Kind string `json:"kind"`
+	Diff string `json:"diff"`
+}
+
 // Function is the stable browser representation of an analyzed function.
 type Function struct {
-	ID             string         `json:"id"`
-	Name           string         `json:"name"`
-	QualifiedName  string         `json:"qualified_name"`
-	Package        string         `json:"package"`
-	Signature      string         `json:"signature"`
-	Parameters     []string       `json:"parameters"`
-	Results        []string       `json:"results"`
-	Contracts      []Contract     `json:"contracts,omitempty"`
-	Intent         string         `json:"intent,omitempty"`
-	IntentSource   string         `json:"intent_source,omitempty"`
-	File           string         `json:"file"`
-	Line           int            `json:"line"`
-	EndLine        int            `json:"end_line"`
-	Source         string         `json:"source,omitempty"`
-	Test           bool           `json:"test"`
-	Classification Classification `json:"classification"`
+	ID             string          `json:"id"`
+	Name           string          `json:"name"`
+	QualifiedName  string          `json:"qualified_name"`
+	Package        string          `json:"package"`
+	Signature      string          `json:"signature"`
+	Parameters     []string        `json:"parameters"`
+	Results        []string        `json:"results"`
+	Contracts      []Contract      `json:"contracts,omitempty"`
+	Intent         string          `json:"intent,omitempty"`
+	IntentSource   string          `json:"intent_source,omitempty"`
+	File           string          `json:"file"`
+	Line           int             `json:"line"`
+	EndLine        int             `json:"end_line"`
+	Source         string          `json:"source,omitempty"`
+	Test           bool            `json:"test"`
+	Classification Classification  `json:"classification"`
+	Change         *FunctionChange `json:"change,omitempty"`
+}
+
+// ChangedFunction is the compact Git review representation of a function.
+type ChangedFunction struct {
+	ID            string `json:"id"`
+	QualifiedName string `json:"qualified_name"`
+	Package       string `json:"package"`
+	File          string `json:"file"`
+	Line          int    `json:"line"`
+	Test          bool   `json:"test"`
+	Kind          string `json:"kind"`
+}
+
+// GitSnapshot records repository state captured with an analysis index.
+type GitSnapshot struct {
+	Available        bool              `json:"available"`
+	Branch           string            `json:"branch,omitempty"`
+	Detached         bool              `json:"detached"`
+	Revision         string            `json:"revision,omitempty"`
+	ChangedFunctions []ChangedFunction `json:"changed_functions"`
 }
 
 // Edge represents one possible call between local functions.
@@ -65,6 +92,7 @@ type Index struct {
 	Outgoing   map[string][]Edge
 	Incoming   map[string][]Edge
 	LoadReport LoadReport
+	Git        GitSnapshot
 }
 
 // SearchResult is the compact representation used by symbol search.

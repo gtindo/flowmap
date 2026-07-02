@@ -87,6 +87,10 @@ Select **Rescan codebase** in the header after changing the target module. Flowm
 
 Flowmap continues serving the last successful scan while the new one is built. If rescanning fails because the source cannot be analyzed, the previous graph remains available and the browser reports the error.
 
+When the module is inside a Git repository, Flowmap also snapshots the current branch and local function changes during each successful scan. The branch label and change list therefore describe the code shown by Flowmap; switching branches or editing files does not alter them until the next rescan. Detached checkouts display their abbreviated commit instead of a branch name.
+
+Select **Changes** in the header to review functions that differ from `HEAD`. This includes staged changes, unstaged changes, and functions in non-ignored untracked Go files. The list labels declarations as new or updated, follows the **Tests** toggle, and is sorted by qualified function name. Selecting an entry focuses its graph and opens its details. Deleted functions are not listed because they are absent from the current scan.
+
 ## Navigate and expand
 
 - Select a node to open its detail panel.
@@ -122,6 +126,7 @@ The detail panel contains:
 - The first paragraph of the source doc comment as authored intent.
 - Functional classification and its evidence.
 - The exact function source excerpt.
+- For a locally changed function, a new/updated badge and a **Show diff** control beside the Source heading. It swaps the source viewer for the function-scoped unified diff; select **Show source** to switch back.
 
 Classification is one of:
 
