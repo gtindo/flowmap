@@ -177,31 +177,55 @@ function render(graph, resetViewport = false) {
   $("reset-layout").classList.remove("hidden");
   currentSize = simple ? { width: 185, height: 48 } : { width: 255, height: 110 };
   const gaps = graphGaps();
-  const byID = new Map(graph.nodes.map(item => [item.id, item]));
-  const levels = new Map([[graph.root, 0]]);
-  const queue = [graph.root];
   const direction = $("direction").value;
-  while (queue.length) {
-    const current = queue.shift();
-    graph.edges.forEach(edge => {
-      let next;
-      if ((direction === "downstream" || direction === "both") && edge.caller_id === current) next = edge.callee_id;
-      if ((direction === "upstream" || direction === "both") && edge.callee_id === current) next = edge.caller_id;
-      if (next && byID.has(next) && !levels.has(next)) { levels.set(next, levels.get(current) + 1); queue.push(next); }
-    });
-  }
-  graph.nodes.forEach(item => { if (!levels.has(item.id)) levels.set(item.id, 0); });
+  const levels = signedLevels(graph, direction);
   const buckets = new Map();
   graph.nodes.forEach(item => { const level = levels.get(item.id); if (!buckets.has(level)) buckets.set(level, []); buckets.get(level).push(item); });
+  const wrap = $("canvas-wrap");
+  const minimumLevel = Math.min(...levels.values());
+  const rootX = Math.max(wrap.clientWidth / 2 - currentSize.width / 2, 40 - minimumLevel * gaps.x);
+  const rootY = Math.max(45, wrap.clientHeight / 2 - currentSize.height / 2);
   currentPositions = new Map();
   for (const [level, items] of buckets) {
     items.sort((left, right) => left.package.localeCompare(right.package) || left.qualified_name.localeCompare(right.qualified_name));
-    items.forEach((item, index) => currentPositions.set(item.id, { x: 40 + level * gaps.x, y: 45 + index * gaps.y }));
+    items.forEach((item, index) => currentPositions.set(item.id, {
+      x: rootX + level * gaps.x,
+      y: rootY + (index - (items.length - 1) / 2) * gaps.y,
+    }));
   }
+  normalizeLayout();
   const saved = readSavedPositions();
   for (const [id, position] of Object.entries(saved)) if (currentPositions.has(id)) currentPositions.set(id, position);
   resizeCanvas(resetViewport);
   drawGraph();
+  if (resetViewport) centerRootInViewport();
+}
+
+function signedLevels(graph, direction) {
+  const byID = new Set(graph.nodes.map(item => item.id));
+  const levels = new Map([[graph.root, 0]]);
+  const queue = [graph.root];
+  while (queue.length) {
+    const current = queue.shift();
+    graph.edges.forEach(edge => {
+      let next;
+      let step;
+      if ((direction === "downstream" || direction === "both") && edge.caller_id === current) {
+        next = edge.callee_id;
+        step = 1;
+      }
+      if ((direction === "upstream" || direction === "both") && edge.callee_id === current) {
+        next = edge.caller_id;
+        step = -1;
+      }
+      if (next && byID.has(next) && !levels.has(next)) {
+        levels.set(next, levels.get(current) + step);
+        queue.push(next);
+      }
+    });
+  }
+  graph.nodes.forEach(item => { if (!levels.has(item.id)) levels.set(item.id, 0); });
+  return levels;
 }
 
 function graphGaps() {
@@ -219,9 +243,34 @@ function resizeCanvas(resetViewport = false) {
   if (resetViewport) {
     zoomScale = 1;
     applyViewport();
-    $("canvas-wrap").scrollTo(0, 0);
   } else {
     applyViewport();
+  }
+}
+
+function centerRootInViewport() {
+  const position = currentGraph && currentPositions.get(currentGraph.root);
+  if (!position) return;
+  const wrap = $("canvas-wrap");
+  wrap.scrollTo(
+    (position.x + currentSize.width / 2) * zoomScale - wrap.clientWidth / 2,
+    (position.y + currentSize.height / 2) * zoomScale - wrap.clientHeight / 2,
+  );
+}
+
+function normalizeLayout() {
+  let minimumX = 40;
+  let minimumY = 10;
+  for (const position of currentPositions.values()) {
+    minimumX = Math.min(minimumX, position.x);
+    minimumY = Math.min(minimumY, position.y);
+  }
+  const deltaX = Math.max(0, 40 - minimumX);
+  const deltaY = Math.max(0, 10 - minimumY);
+  if (!deltaX && !deltaY) return;
+  for (const position of currentPositions.values()) {
+    position.x += deltaX;
+    position.y += deltaY;
   }
 }
 
@@ -333,14 +382,28 @@ async function expandNode(id) {
     const anchor = currentPositions.get(id) || { x: 40, y: 45 };
     const gaps = graphGaps();
     const saved = readSavedPositions();
-    newItems.forEach((item, index) => {
-      const automatic = { x: anchor.x + gaps.x, y: Math.max(10, anchor.y + (index - (newItems.length - 1) / 2) * gaps.y) };
-      currentPositions.set(item.id, saved[item.id] || automatic);
-    });
+    const sides = new Map([[-1, []], [1, []]]);
+    newItems.forEach(item => sides.get(expansionSide(expansion, id, item.id)).push(item));
+    for (const [side, items] of sides) {
+      items.forEach((item, index) => {
+        const automatic = {
+          x: anchor.x + side * gaps.x,
+          y: anchor.y + (index - (items.length - 1) / 2) * gaps.y,
+        };
+        currentPositions.set(item.id, saved[item.id] || automatic);
+      });
+    }
+    normalizeLayout();
     savePositions();
     resizeCanvas(false);
     drawGraph();
   } catch (error) { alert(error.message); }
+}
+
+function expansionSide(expansion, anchorID, itemID) {
+  if (expansion.edges.some(edge => edge.callee_id === anchorID && edge.caller_id === itemID)) return -1;
+  if (expansion.edges.some(edge => edge.caller_id === anchorID && edge.callee_id === itemID)) return 1;
+  return $("direction").value === "upstream" ? -1 : 1;
 }
 
 function collapseNode(id) {
@@ -466,7 +529,7 @@ function applyViewport() {
 }
 
 function layoutKey() {
-  return "flowmap-layout:" + $("view").value + ":" + rootID + ":" + $("direction").value + ":" + $("tests").checked;
+  return "flowmap-layout:v2:" + $("view").value + ":" + rootID + ":" + $("direction").value + ":" + $("tests").checked;
 }
 
 function readSavedPositions() {
