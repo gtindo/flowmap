@@ -21,6 +21,11 @@ let baseRootNode;
 let detailGeneration = 0;
 let detailController;
 let activeDetailID;
+let activeDetailResize;
+const detailWidthKey = "flowmap-detail-width:v1";
+const detailMinWidth = 320;
+const detailViewportMargin = 48;
+let preferredDetailWidth = readDetailWidth();
 
 function node(tag, cls, text) {
   const value = document.createElement(tag);
@@ -59,6 +64,49 @@ function sourceBlock(source) {
   return pre;
 }
 
+function readDetailWidth() {
+  try {
+    const width = Number(localStorage.getItem(detailWidthKey));
+    return Number.isFinite(width) && width > 0 ? width : undefined;
+  } catch (_) { return undefined; }
+}
+
+function clampDetailWidth(width) {
+  const maximum = Math.max(0, window.innerWidth - detailViewportMargin);
+  const minimum = Math.min(detailMinWidth, maximum);
+  return Math.min(maximum, Math.max(minimum, width));
+}
+
+function applyDetailWidth(width) {
+  if (!Number.isFinite(width)) return;
+  document.documentElement.style.setProperty("--detail-width", clampDetailWidth(width) + "px");
+}
+
+function startDetailResize(event) {
+  event.preventDefault();
+  event.stopPropagation();
+  const handle = event.currentTarget;
+  activeDetailResize = { pointerID: event.pointerId, handle };
+  handle.classList.add("resizing");
+  handle.setPointerCapture(event.pointerId);
+}
+
+function resizeDetail(event) {
+  if (!activeDetailResize || activeDetailResize.pointerID !== event.pointerId) return;
+  event.preventDefault();
+  event.stopPropagation();
+  preferredDetailWidth = clampDetailWidth(window.innerWidth - event.clientX);
+  applyDetailWidth(preferredDetailWidth);
+}
+
+function finishDetailResize(event) {
+  if (!activeDetailResize || activeDetailResize.pointerID !== event.pointerId) return;
+  event.stopPropagation();
+  activeDetailResize.handle.classList.remove("resizing");
+  activeDetailResize = undefined;
+  try { localStorage.setItem(detailWidthKey, String(preferredDetailWidth)); } catch (_) {}
+}
+
 async function json(url, options) {
   const response = await fetch(url, options);
   const value = await response.json();
@@ -77,11 +125,19 @@ $("zoom-out").addEventListener("click", () => zoomGraph(1.25));
 $("fit-graph").addEventListener("click", fitGraph);
 $("hand-tool").addEventListener("click", toggleHandTool);
 $("canvas").addEventListener("pointerdown", startPan);
+$("detail-resize").addEventListener("pointerdown", startDetailResize);
+$("detail-resize").addEventListener("pointermove", resizeDetail);
+$("detail-resize").addEventListener("pointerup", finishDetailResize);
+$("detail-resize").addEventListener("pointercancel", finishDetailResize);
 $("close").onclick = hideDetail;
 document.addEventListener("click", event => { if (!event.target.closest(".search-wrap")) hideResults(); });
 document.addEventListener("pointermove", movePointer);
 document.addEventListener("pointerup", finishPointer);
-window.addEventListener("resize", () => { if (currentGraph) applyViewport(); });
+window.addEventListener("resize", () => {
+  applyDetailWidth(preferredDetailWidth);
+  if (currentGraph) applyViewport();
+});
+applyDetailWidth(preferredDetailWidth);
 
 function hideResults() {
   searchGeneration++;
