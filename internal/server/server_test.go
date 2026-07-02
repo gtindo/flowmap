@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"image/png"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -111,6 +112,99 @@ func TestHandlerServesPersistentSystemAwareThemes(t *testing.T) {
 		if !strings.Contains(script, expected) {
 			t.Fatalf("theme behavior omitted %s", expected)
 		}
+	}
+}
+
+func TestHandlerServesInstallablePWA(t *testing.T) {
+	app, _ := New(fixtureIndex(), nil, nil)
+	handler := app.Handler()
+
+	pageResponse := httptest.NewRecorder()
+	handler.ServeHTTP(pageResponse, httptest.NewRequest(http.MethodGet, "/", nil))
+	page := pageResponse.Body.String()
+	for _, expected := range []string{
+		`rel="manifest" href="/manifest.webmanifest"`,
+		`rel="icon" href="/favicon.svg" type="image/svg+xml"`,
+		`rel="apple-touch-icon" href="/icon-512.png"`,
+		`name="theme-color" content="#f8fafc"`,
+		`name="theme-color" content="#171b22"`,
+	} {
+		if !strings.Contains(page, expected) {
+			t.Fatalf("PWA page metadata omitted %s", expected)
+		}
+	}
+
+	manifestResponse := httptest.NewRecorder()
+	handler.ServeHTTP(manifestResponse, httptest.NewRequest(http.MethodGet, "/manifest.webmanifest", nil))
+	if manifestResponse.Code != http.StatusOK || !strings.HasPrefix(manifestResponse.Header().Get("Content-Type"), "application/manifest+json") {
+		t.Fatalf("manifest response = %d %q", manifestResponse.Code, manifestResponse.Header().Get("Content-Type"))
+	}
+	var manifest struct {
+		ID              string `json:"id"`
+		Name            string `json:"name"`
+		StartURL        string `json:"start_url"`
+		Scope           string `json:"scope"`
+		Display         string `json:"display"`
+		BackgroundColor string `json:"background_color"`
+		ThemeColor      string `json:"theme_color"`
+		Icons           []struct {
+			Source  string `json:"src"`
+			Sizes   string `json:"sizes"`
+			Type    string `json:"type"`
+			Purpose string `json:"purpose"`
+		} `json:"icons"`
+	}
+	if err := json.Unmarshal(manifestResponse.Body.Bytes(), &manifest); err != nil {
+		t.Fatalf("decode manifest: %v", err)
+	}
+	if manifest.ID != "/" || manifest.Name != "Flowmap" || manifest.StartURL != "/" || manifest.Scope != "/" || manifest.Display != "standalone" || manifest.BackgroundColor != "#eef1f5" || manifest.ThemeColor != "#f8fafc" {
+		t.Fatalf("manifest metadata = %#v", manifest)
+	}
+	if len(manifest.Icons) != 2 {
+		t.Fatalf("manifest icons = %#v", manifest.Icons)
+	}
+	faviconResponse := httptest.NewRecorder()
+	handler.ServeHTTP(faviconResponse, httptest.NewRequest(http.MethodGet, "/favicon.svg", nil))
+	if faviconResponse.Code != http.StatusOK || !strings.HasPrefix(faviconResponse.Header().Get("Content-Type"), "image/svg+xml") || !strings.Contains(faviconResponse.Body.String(), `<svg xmlns="http://www.w3.org/2000/svg"`) {
+		t.Fatalf("favicon response = %d %q %s", faviconResponse.Code, faviconResponse.Header().Get("Content-Type"), faviconResponse.Body.String())
+	}
+	for index, expectedSize := range []int{192, 512} {
+		expectedPath := fmt.Sprintf("/icon-%d.png", expectedSize)
+		icon := manifest.Icons[index]
+		if icon.Source != expectedPath || icon.Sizes != fmt.Sprintf("%dx%d", expectedSize, expectedSize) || icon.Type != "image/png" || icon.Purpose != "any maskable" {
+			t.Fatalf("manifest icon %d = %#v", expectedSize, icon)
+		}
+		iconResponse := httptest.NewRecorder()
+		handler.ServeHTTP(iconResponse, httptest.NewRequest(http.MethodGet, expectedPath, nil))
+		config, err := png.DecodeConfig(iconResponse.Body)
+		if iconResponse.Code != http.StatusOK || !strings.HasPrefix(iconResponse.Header().Get("Content-Type"), "image/png") || err != nil || config.Width != expectedSize || config.Height != expectedSize {
+			t.Fatalf("icon %s = status %d, config %#v, error %v", expectedPath, iconResponse.Code, config, err)
+		}
+	}
+
+	scriptResponse := httptest.NewRecorder()
+	handler.ServeHTTP(scriptResponse, httptest.NewRequest(http.MethodGet, "/app.js", nil))
+	if !strings.Contains(scriptResponse.Body.String(), `navigator.serviceWorker.register("/sw.js")`) {
+		t.Fatal("app script does not register the root service worker")
+	}
+	workerResponse := httptest.NewRecorder()
+	handler.ServeHTTP(workerResponse, httptest.NewRequest(http.MethodGet, "/sw.js", nil))
+	worker := workerResponse.Body.String()
+	for _, expected := range []string{
+		`const fallbackAssets = ["/offline.html"]`,
+		`event.request.mode !== "navigate"`,
+		`fetch(event.request).catch(() => caches.match("/offline.html"))`,
+		`key.startsWith("flowmap-offline-") && key !== fallbackCache`,
+		`self.clients.claim()`,
+	} {
+		if !strings.Contains(worker, expected) {
+			t.Fatalf("service worker omitted %s", expected)
+		}
+	}
+	offlineResponse := httptest.NewRecorder()
+	handler.ServeHTTP(offlineResponse, httptest.NewRequest(http.MethodGet, "/offline.html", nil))
+	if offlineResponse.Code != http.StatusOK || !strings.Contains(offlineResponse.Body.String(), "Flowmap isn’t running") || !strings.Contains(offlineResponse.Body.String(), "flowmap serve /path/to/go/project") {
+		t.Fatalf("offline response = %d %s", offlineResponse.Code, offlineResponse.Body.String())
 	}
 }
 

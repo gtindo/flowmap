@@ -14,6 +14,8 @@ go run ./cmd/flowmap serve /path/to/go/module
 
 Open `http://127.0.0.1:7878`, search for a function, and choose upstream, downstream, or both directions. Use `--tags tag1,tag2` for build tags and `--addr 127.0.0.1:9000` to change the local address.
 
+To keep Flowmap in the macOS Dock, open the running workbench in Safari and choose **File > Add to Dock**, or use **Install Flowmap** in Chrome. The installed web app uses the same host and port and does not start the Flowmap server; see the [user guide](USER_GUIDE.md#add-flowmap-to-the-macos-dock) for details.
+
 Tests are indexed but hidden until the **Tests** toggle is enabled. Anonymous functions and non-local packages stay outside the visible graph. Dashed edges are interface/dynamic-dispatch candidates rather than definite static calls.
 
 ## Navigate the graph

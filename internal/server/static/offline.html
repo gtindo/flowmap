@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#f8fafc" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#171b22" media="(prefers-color-scheme: dark)">
+  <title>Flowmap isn’t running</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <style>
+    :root { color-scheme: light dark; font: 15px/1.55 Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #eef1f5; color: #1f2937; }
+    body { min-height: 100vh; margin: 0; display: grid; place-items: center; padding: 24px; box-sizing: border-box; }
+    main { width: min(440px, 100%); padding: 36px; box-sizing: border-box; border: 1px solid #d7dde6; border-radius: 16px; background: #fff; box-shadow: 0 8px 24px rgb(30 41 59 / 12%); text-align: center; }
+    .mark { width: 72px; height: 72px; border-radius: 14px; }
+    h1 { margin: 18px 0 8px; font-size: 24px; color: #111827; }
+    p { margin: 0; color: #667085; }
+    code { display: block; margin-top: 18px; padding: 10px 12px; overflow-wrap: anywhere; border-radius: 8px; background: #f5f7fa; color: #1f2937; text-align: left; }
+    @media (prefers-color-scheme: dark) {
+      :root { background: #11151b; color: #d6dce5; }
+      main { background: #1b2028; border-color: #303844; box-shadow: 0 10px 28px rgb(0 0 0 / 34%); }
+      h1 { color: #f2f5f8; }
+      p { color: #9ba6b5; }
+      code { background: #171c23; color: #d6dce5; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <svg class="mark" viewBox="0 0 512 512" aria-hidden="true"><rect width="512" height="512" fill="#3978c6"/><path d="M170 112h188v66H242v48h98v64h-98v110h-72z" fill="#fff"/></svg>
+    <h1>Flowmap isn’t running</h1>
+    <p>Start the local server, then reopen this app from the Dock.</p>
+    <code>flowmap serve /path/to/go/project</code>
+  </main>
+</body>
+</html>

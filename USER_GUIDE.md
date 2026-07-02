@@ -68,6 +68,17 @@ Useful options:
 
 The server binds to localhost by default and is not exposed to other machines. Stop it with `Ctrl-C`.
 
+### Add Flowmap to the macOS Dock
+
+While Flowmap is running, open `http://127.0.0.1:7878` in your preferred browser:
+
+- In Safari, choose **File > Add to Dock**, keep the name **Flowmap**, and select **Add**.
+- In Chrome or another Chromium browser, select the install icon in the address bar or choose **Install Flowmap** from the browser menu.
+
+The installed app opens in its own window and can be launched from the Dock, Launchpad, or Spotlight. Flowmap still needs its local server: start `flowmap serve` before opening the installed app. If the server is unavailable, the app displays a reminder instead of a connection-error page.
+
+The installed app is tied to the exact address used during installation. If you change `--addr`, including its port, remove the existing web app and install it again from the new address.
+
 ## Start a graph
 
 1. Type part of a package, receiver, or function name into the search field.

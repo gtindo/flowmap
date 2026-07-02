@@ -70,7 +70,13 @@ func (app *App) Handler() http.Handler {
 	mux.HandleFunc("POST /api/functions/{id}/summary", app.handleSummary)
 	mux.HandleFunc("POST /api/rescan", app.handleRescan)
 	assets, _ := fs.Sub(staticFiles, "static")
-	mux.Handle("/", http.FileServer(http.FS(assets)))
+	fileServer := http.FileServer(http.FS(assets))
+	mux.Handle("/", http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if request.URL.Path == "/manifest.webmanifest" {
+			response.Header().Set("Content-Type", "application/manifest+json")
+		}
+		fileServer.ServeHTTP(response, request)
+	}))
 	return mux
 }
 

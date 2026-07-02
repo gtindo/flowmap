@@ -207,6 +207,12 @@ window.addEventListener("resize", () => {
 applyDetailWidth(preferredDetailWidth);
 loadGitStatus();
 
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("/sw.js").catch(() => {});
+  });
+}
+
 async function loadGitStatus() {
   try {
     gitSnapshot = await json("/api/git-status");
