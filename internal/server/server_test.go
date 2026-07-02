@@ -52,7 +52,7 @@ func TestHandlerServesNavigableGraphViews(t *testing.T) {
 	pageResponse := httptest.NewRecorder()
 	app.Handler().ServeHTTP(pageResponse, httptest.NewRequest(http.MethodGet, "/", nil))
 	page := pageResponse.Body.String()
-	for _, expected := range []string{"class=\"app-header\"", "class=\"brand\"", "class=\"search-wrap\"", "class=\"controls\"", "aria-label=\"Navigation\"", "aria-label=\"Graph options\"", "aria-label=\"Canvas tools\"", "aria-label=\"Utilities\"", "id=\"view\"", "value=\"simple\"", "id=\"history-back\"", "id=\"history-forward\"", "Back to previous function", "Forward to next function", "id=\"reset-layout\"", "id=\"zoom-in\"", "id=\"zoom-out\"", "id=\"hand-tool\"", "id=\"git-review\"", "id=\"git-branch\"", "id=\"changes-button\"", "id=\"changes-menu\"", "id=\"rescan\"", "id=\"detail-resize\"", "role=\"separator\""} {
+	for _, expected := range []string{"class=\"app-header\"", "class=\"brand\"", "class=\"search-wrap\"", "class=\"controls\"", "aria-label=\"Navigation\"", "aria-label=\"Graph options\"", "aria-label=\"Canvas tools\"", "aria-label=\"Utilities\"", "id=\"view\"", "value=\"simple\"", "id=\"history-back\"", "id=\"history-forward\"", "Back to previous function", "Forward to next function", "id=\"reset-layout\"", "id=\"zoom-in\"", "id=\"zoom-out\"", "id=\"hand-tool\" class=\"icon-button active\"", "aria-label=\"Pan tool\" aria-pressed=\"true\"", "id=\"canvas\" class=\"hand\"", "id=\"git-review\"", "id=\"git-branch\"", "id=\"changes-button\"", "id=\"changes-menu\"", "id=\"rescan\"", "id=\"detail-resize\"", "role=\"separator\""} {
 		if !strings.Contains(page, expected) {
 			t.Fatalf("workbench page omitted %s", expected)
 		}

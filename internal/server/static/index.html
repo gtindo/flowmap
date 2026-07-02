@@ -58,7 +58,7 @@
         <button id="zoom-out" class="icon-button" title="Zoom out" aria-label="Zoom out"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5 21 21M7.5 10.5h6"/></svg></button>
         <button id="zoom-in" class="icon-button" title="Zoom in" aria-label="Zoom in"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5 21 21M10.5 7.5v6M7.5 10.5h6"/></svg></button>
         <button id="fit-graph" class="icon-button" title="Fit graph" aria-label="Fit graph"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 4H4v5M15 4h5v5M9 20H4v-5M15 20h5v-5"/></svg></button>
-        <button id="hand-tool" class="icon-button" title="Pan tool" aria-label="Pan tool" aria-pressed="false"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7.5 11V6.5a1.5 1.5 0 0 1 3 0V10m0-4.5a1.5 1.5 0 0 1 3 0V10m0-3.5a1.5 1.5 0 0 1 3 0V10m0-2.5a1.5 1.5 0 0 1 3 0v5.8c0 4.2-2.8 6.7-6.7 6.7h-.9c-2.2 0-3.8-.8-5.2-2.5l-3-3.7a1.5 1.5 0 0 1 2.2-2l1.6 1.2V11Z"/></svg></button>
+        <button id="hand-tool" class="icon-button active" title="Pan tool" aria-label="Pan tool" aria-pressed="true"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7.5 11V6.5a1.5 1.5 0 0 1 3 0V10m0-4.5a1.5 1.5 0 0 1 3 0V10m0-3.5a1.5 1.5 0 0 1 3 0V10m0-2.5a1.5 1.5 0 0 1 3 0v5.8c0 4.2-2.8 6.7-6.7 6.7h-.9c-2.2 0-3.8-.8-5.2-2.5l-3-3.7a1.5 1.5 0 0 1 2.2-2l1.6 1.2V11Z"/></svg></button>
         <button id="reset-layout" class="icon-button hidden" title="Reset layout" aria-label="Reset layout"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 4v6h6M5.5 15a7 7 0 1 0 .5-7.5L4 10"/></svg></button>
       </div>
 
@@ -82,7 +82,7 @@
     </section>
     <section id="workspace" class="hidden">
       <div id="legend"><span class="legend-title">Classification</span><span><i class="dot pure"></i>pure</span><span><i class="dot edge"></i>edge</span><span><i class="dot unknown"></i>unknown</span><span><i class="dash"></i>dynamic candidate</span></div>
-      <div id="canvas-wrap"><svg id="canvas"><defs><marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0 0L8 4 0 8z"></path></marker></defs><g id="edges"></g><g id="nodes"></g></svg></div>
+      <div id="canvas-wrap"><svg id="canvas" class="hand"><defs><marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0 0L8 4 0 8z"></path></marker></defs><g id="edges"></g><g id="nodes"></g></svg></div>
     </section>
     <aside id="detail" class="hidden">
       <div id="detail-resize" role="separator" aria-label="Resize detail panel" aria-orientation="vertical"></div>
