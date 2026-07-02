@@ -3,9 +3,11 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/gtindo/flowmap/internal/analyzer"
@@ -57,7 +59,7 @@ func TestHandlerServesNavigableGraphViews(t *testing.T) {
 	scriptResponse := httptest.NewRecorder()
 	app.Handler().ServeHTTP(scriptResponse, httptest.NewRequest(http.MethodGet, "/app.js", nil))
 	script := scriptResponse.Body.String()
-	for _, expected := range []string{"startDrag", "pointerMoveThreshold = 4", "Math.hypot", "localStorage.setItem", "resetLayout", "flowmap-layout:v2:", "signedLevels", "step = -1", "centerRootInViewport", "normalizeLayout", "expansionSide", "focusGraph", "expandNode", "collapseNode", "pruneOrphanedExpansions", "zoomGraph", "startPan", "scrollLeft", "scrollTop", "zoomScale", "viewportState", "viewportCenter", "scrollViewportTo", "marginX = wrap.clientWidth", "marginY = wrap.clientHeight", "-marginX / zoomScale", "-marginY / zoomScale", "&depth=1", "highlightGo", "sourceBlock(item.source)", "detailGeneration", "activeDetailID", "setActiveDetail", "detail-selected", "detail-focus-ring", "AbortController", "Loading details…", "Unable to load details", "hideDetail", "item.contracts || []", "item.classification.evidence || []", "expansionActivationWindow = 400", "expansionActivationTimes", "event.target.closest(\".expand-control\")", "addEventListener(\"dblclick\"", "flowmap-detail-width:v1", "startDetailResize", "resizeDetail", "finishDetailResize", "clampDetailWidth", "detailViewportMargin = 48"} {
+	for _, expected := range []string{"startDrag", "pointerMoveThreshold = 4", "Math.hypot", "localStorage.setItem", "resetLayout", "flowmap-layout:v2:", "signedLevels", "step = -1", "centerRootInViewport", "normalizeLayout", "expansionSide", "focusGraph", "expandNode", "collapseNode", "pruneOrphanedExpansions", "zoomGraph", "startPan", "scrollLeft", "scrollTop", "zoomScale", "viewportState", "viewportCenter", "scrollViewportTo", "marginX = wrap.clientWidth", "marginY = wrap.clientHeight", "-marginX / zoomScale", "-marginY / zoomScale", "&depth=1", "highlightGo", "sourceBlock(item.source)", "detailGeneration", "activeDetailID", "setActiveDetail", "detail-selected", "detail-focus-ring", "AbortController", "Loading details…", "Unable to load details", "hideDetail", "item.contracts || []", "item.classification.evidence || []", "expansionActivationWindow = 400", "expansionActivationTimes", "event.target.closest(\".expand-control\")", "addEventListener(\"dblclick\"", "flowmap-detail-width:v1", "startDetailResize", "resizeDetail", "finishDetailResize", "clampDetailWidth", "detailViewportMargin = 48", "Rescan codebase", "rescanCodebase", "showEmptyAfterRescan", "Scanning…", "POST"} {
 		if !strings.Contains(script, expected) {
 			t.Fatalf("workbench script omitted %s", expected)
 		}
@@ -71,6 +73,75 @@ func TestHandlerServesNavigableGraphViews(t *testing.T) {
 		if !strings.Contains(styleResponse.Body.String(), expected) {
 			t.Fatalf("workbench stylesheet omitted %s", expected)
 		}
+	}
+}
+
+func TestRescanAtomicallyReplacesIndexAndRejectsOverlap(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var calls atomic.Int32
+	config := analyzer.Config{Root: "/work/project", BuildTags: []string{"integration"}}
+	replacement := fixtureIndexWithRoot("replacement", "sample.Replacement")
+	app, err := newApp(fixtureIndex(), nil, nil, config, func(_ context.Context, actual analyzer.Config) (*analyzer.Index, error) {
+		if actual.Root != config.Root || len(actual.BuildTags) != 1 || actual.BuildTags[0] != "integration" {
+			return nil, fmt.Errorf("unexpected analyzer config: %#v", actual)
+		}
+		calls.Add(1)
+		close(started)
+		<-release
+		return replacement, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	done := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		response := httptest.NewRecorder()
+		app.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/rescan", nil))
+		done <- response
+	}()
+	<-started
+
+	oldSearch := httptest.NewRecorder()
+	app.Handler().ServeHTTP(oldSearch, httptest.NewRequest(http.MethodGet, "/api/search?q=Root", nil))
+	if oldSearch.Code != http.StatusOK || !strings.Contains(oldSearch.Body.String(), "sample.Root") {
+		t.Fatalf("old index unavailable during rescan: %d %s", oldSearch.Code, oldSearch.Body.String())
+	}
+	overlap := httptest.NewRecorder()
+	app.Handler().ServeHTTP(overlap, httptest.NewRequest(http.MethodPost, "/api/rescan", nil))
+	if overlap.Code != http.StatusConflict {
+		t.Fatalf("overlapping rescan status = %d body = %s", overlap.Code, overlap.Body.String())
+	}
+
+	close(release)
+	response := <-done
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"function_count":1`) {
+		t.Fatalf("rescan response = %d %s", response.Code, response.Body.String())
+	}
+	newSearch := httptest.NewRecorder()
+	app.Handler().ServeHTTP(newSearch, httptest.NewRequest(http.MethodGet, "/api/search?q=Replacement", nil))
+	if newSearch.Code != http.StatusOK || !strings.Contains(newSearch.Body.String(), "sample.Replacement") || calls.Load() != 1 {
+		t.Fatalf("replacement index not installed: %d %s calls=%d", newSearch.Code, newSearch.Body.String(), calls.Load())
+	}
+}
+
+func TestFailedRescanKeepsPreviousIndex(t *testing.T) {
+	app, err := newApp(fixtureIndex(), nil, nil, analyzer.Config{Root: "/work/project"}, func(context.Context, analyzer.Config) (*analyzer.Index, error) {
+		return nil, fmt.Errorf("broken source")
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := httptest.NewRecorder()
+	app.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/rescan", nil))
+	if response.Code != http.StatusInternalServerError || !strings.Contains(response.Body.String(), "broken source") {
+		t.Fatalf("failed rescan response = %d %s", response.Code, response.Body.String())
+	}
+	search := httptest.NewRecorder()
+	app.Handler().ServeHTTP(search, httptest.NewRequest(http.MethodGet, "/api/search?q=Root", nil))
+	if search.Code != http.StatusOK || !strings.Contains(search.Body.String(), "sample.Root") {
+		t.Fatalf("old index lost after failed rescan: %d %s", search.Code, search.Body.String())
 	}
 }
 
@@ -119,4 +190,9 @@ func fixtureIndex() *analyzer.Index {
 	child := analyzer.Function{ID: "child", QualifiedName: "sample.Child", Package: "sample", Classification: analyzer.Classification{Kind: "unknown"}}
 	edge := analyzer.Edge{CallerID: "root", CalleeID: "child"}
 	return &analyzer.Index{Functions: map[string]analyzer.Function{"root": root, "child": child}, Edges: []analyzer.Edge{edge}, Outgoing: map[string][]analyzer.Edge{"root": {edge}}, Incoming: map[string][]analyzer.Edge{"child": {edge}}}
+}
+
+func fixtureIndexWithRoot(id string, qualifiedName string) *analyzer.Index {
+	root := analyzer.Function{ID: id, Name: qualifiedName, QualifiedName: qualifiedName, Package: "sample", Classification: analyzer.Classification{Kind: "pure"}}
+	return &analyzer.Index{Functions: map[string]analyzer.Function{id: root}, Outgoing: map[string][]analyzer.Edge{}, Incoming: map[string][]analyzer.Edge{}}
 }

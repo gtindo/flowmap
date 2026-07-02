@@ -59,7 +59,8 @@ func run(arguments []string) error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
-	index, err := analyzer.Analyze(ctx, analyzer.Config{Root: modulePath, BuildTags: splitTags(*buildTags)})
+	analysisConfig := analyzer.Config{Root: modulePath, BuildTags: splitTags(*buildTags)}
+	index, err := analyzer.Analyze(ctx, analysisConfig)
 	if err != nil {
 		return err
 	}
@@ -73,7 +74,7 @@ func run(arguments []string) error {
 			return err
 		}
 	}
-	app, err := server.New(index, summarizer, cache)
+	app, err := server.NewRescannable(index, summarizer, cache, analysisConfig)
 	if err != nil {
 		return err
 	}

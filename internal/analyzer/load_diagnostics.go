@@ -17,19 +17,19 @@ const (
 // LoadDiagnostic is one unique Go package loading problem and the package
 // variants in which go/packages reported it.
 type LoadDiagnostic struct {
-	Kind     string
-	Position string
-	Message  string
-	Packages []string
+	Kind     string   `json:"kind"`
+	Position string   `json:"position"`
+	Message  string   `json:"message"`
+	Packages []string `json:"packages"`
 }
 
 // LoadReport summarizes package variants omitted from an analysis.
 type LoadReport struct {
-	Root                  string
-	BuildTags             []string
-	TotalPackageVariants  int
-	FailedPackageVariants int
-	Diagnostics           []LoadDiagnostic
+	Root                  string           `json:"root"`
+	BuildTags             []string         `json:"build_tags"`
+	TotalPackageVariants  int              `json:"total_package_variants"`
+	FailedPackageVariants int              `json:"failed_package_variants"`
+	Diagnostics           []LoadDiagnostic `json:"diagnostics"`
 }
 
 // HasFailures reports whether any loaded package variant was omitted.

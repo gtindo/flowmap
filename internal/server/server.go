@@ -11,6 +11,8 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gtindo/flowmap/internal/analyzer"
@@ -21,20 +23,40 @@ var staticFiles embed.FS
 
 // App serves one immutable analysis index and optional summary provider.
 type App struct {
-	index      *analyzer.Index
+	index      atomic.Pointer[analyzer.Index]
 	summarizer Summarizer
 	cache      *SummaryCache
+	analysis   analyzer.Config
+	analyze    func(context.Context, analyzer.Config) (*analyzer.Index, error)
+	rescan     sync.Mutex
+}
+
+// RescanResult describes a newly installed analysis index.
+type RescanResult struct {
+	FunctionCount int                 `json:"function_count"`
+	LoadReport    analyzer.LoadReport `json:"load_report"`
 }
 
 // New creates a local workbench handler without starting network I/O.
 func New(index *analyzer.Index, summarizer Summarizer, cache *SummaryCache) (*App, error) {
+	return newApp(index, summarizer, cache, analyzer.Config{}, nil)
+}
+
+// NewRescannable creates a workbench that can rebuild its index in process.
+func NewRescannable(index *analyzer.Index, summarizer Summarizer, cache *SummaryCache, config analyzer.Config) (*App, error) {
+	return newApp(index, summarizer, cache, config, analyzer.Analyze)
+}
+
+func newApp(index *analyzer.Index, summarizer Summarizer, cache *SummaryCache, config analyzer.Config, analyze func(context.Context, analyzer.Config) (*analyzer.Index, error)) (*App, error) {
 	if index == nil {
 		return nil, fmt.Errorf("create server: analysis index is required")
 	}
 	if summarizer != nil && cache == nil {
 		return nil, fmt.Errorf("create server: summary cache is required when a summarizer is configured")
 	}
-	return &App{index: index, summarizer: summarizer, cache: cache}, nil
+	app := &App{summarizer: summarizer, cache: cache, analysis: config, analyze: analyze}
+	app.index.Store(index)
+	return app, nil
 }
 
 // Handler returns the complete local HTTP API and embedded UI.
@@ -44,6 +66,7 @@ func (app *App) Handler() http.Handler {
 	mux.HandleFunc("GET /api/graph", app.handleGraph)
 	mux.HandleFunc("GET /api/functions/{id}", app.handleFunction)
 	mux.HandleFunc("POST /api/functions/{id}/summary", app.handleSummary)
+	mux.HandleFunc("POST /api/rescan", app.handleRescan)
 	assets, _ := fs.Sub(staticFiles, "static")
 	mux.Handle("/", http.FileServer(http.FS(assets)))
 	return mux
@@ -72,13 +95,13 @@ func (app *App) Listen(ctx context.Context, address string) error {
 
 // handleSearch returns compact symbol matches.
 func (app *App) handleSearch(response http.ResponseWriter, request *http.Request) {
-	writeJSON(response, http.StatusOK, app.index.Search(request.URL.Query().Get("q"), request.URL.Query().Get("tests") == "true", 100))
+	writeJSON(response, http.StatusOK, app.index.Load().Search(request.URL.Query().Get("q"), request.URL.Query().Get("tests") == "true", 100))
 }
 
 // handleGraph returns a bounded function neighborhood.
 func (app *App) handleGraph(response http.ResponseWriter, request *http.Request) {
 	depth, _ := strconv.Atoi(request.URL.Query().Get("depth"))
-	graph, err := app.index.Focus(request.URL.Query().Get("root"), request.URL.Query().Get("direction"), depth, request.URL.Query().Get("tests") == "true")
+	graph, err := app.index.Load().Focus(request.URL.Query().Get("root"), request.URL.Query().Get("direction"), depth, request.URL.Query().Get("tests") == "true")
 	if err != nil {
 		writeError(response, http.StatusNotFound, err)
 		return
@@ -88,7 +111,7 @@ func (app *App) handleGraph(response http.ResponseWriter, request *http.Request)
 
 // handleFunction returns source and detailed contract information for one node.
 func (app *App) handleFunction(response http.ResponseWriter, request *http.Request) {
-	function, exists := app.index.Function(request.PathValue("id"))
+	function, exists := app.index.Load().Function(request.PathValue("id"))
 	if !exists {
 		writeError(response, http.StatusNotFound, fmt.Errorf("function not found"))
 		return
@@ -102,7 +125,7 @@ func (app *App) handleSummary(response http.ResponseWriter, request *http.Reques
 		writeError(response, http.StatusNotImplemented, fmt.Errorf("AI summarization is disabled; configure --summarizer-command"))
 		return
 	}
-	function, exists := app.index.Function(request.PathValue("id"))
+	function, exists := app.index.Load().Function(request.PathValue("id"))
 	if !exists {
 		writeError(response, http.StatusNotFound, fmt.Errorf("function not found"))
 		return
@@ -122,6 +145,28 @@ func (app *App) handleSummary(response http.ResponseWriter, request *http.Reques
 		return
 	}
 	writeJSON(response, http.StatusOK, SummaryResult{Summary: summary, Source: "generated"})
+}
+
+// handleRescan builds a replacement beside the current immutable index, then
+// installs it in one atomic operation so readers never observe partial state.
+func (app *App) handleRescan(response http.ResponseWriter, request *http.Request) {
+	if app.analyze == nil {
+		writeError(response, http.StatusNotImplemented, fmt.Errorf("codebase rescanning is not configured"))
+		return
+	}
+	if !app.rescan.TryLock() {
+		writeError(response, http.StatusConflict, fmt.Errorf("a codebase rescan is already in progress"))
+		return
+	}
+	defer app.rescan.Unlock()
+
+	index, err := app.analyze(request.Context(), app.analysis)
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, fmt.Errorf("rescan codebase: %w", err))
+		return
+	}
+	app.index.Store(index)
+	writeJSON(response, http.StatusOK, RescanResult{FunctionCount: len(index.Functions), LoadReport: index.LoadReport})
 }
 
 // writeJSON sends one JSON response with a stable content type.

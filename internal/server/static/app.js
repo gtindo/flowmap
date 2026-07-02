@@ -110,10 +110,19 @@ function finishDetailResize(event) {
 async function json(url, options) {
   const response = await fetch(url, options);
   const value = await response.json();
-  if (!response.ok) throw new Error(value.error || response.statusText);
+  if (!response.ok) {
+    const error = new Error(value.error || response.statusText);
+    error.status = response.status;
+    throw error;
+  }
   return value;
 }
 
+const rescanButton = node("button", "", "Rescan codebase");
+rescanButton.id = "rescan";
+rescanButton.title = "Rebuild the codebase scan";
+document.querySelector(".controls").prepend(rescanButton);
+rescanButton.addEventListener("click", rescanCodebase);
 $("search").addEventListener("input", () => { clearTimeout(timer); timer = setTimeout(search, 150); });
 $("search").addEventListener("keydown", event => { if (event.key === "Escape") hideResults(); });
 $("tests").addEventListener("change", () => rootID ? loadGraph() : search());
@@ -167,13 +176,60 @@ async function loadGraph() {
   const url = graphURL(rootID);
   try {
     const graph = await json(url);
-    baseRootNode = graph.nodes.find(item => item.id === graph.root);
-    expansionRecords = new Map([[graph.root, graph]]);
-    expandedNodes = new Set([graph.root]);
-    $("empty").classList.add("hidden");
-    $("workspace").classList.remove("hidden");
-    render(composeGraph(), true);
+    showLoadedGraph(graph);
   } catch (error) { alert(error.message); }
+}
+
+function showLoadedGraph(graph) {
+  baseRootNode = graph.nodes.find(item => item.id === graph.root);
+  expansionRecords = new Map([[graph.root, graph]]);
+  expandedNodes = new Set([graph.root]);
+  $("empty").classList.add("hidden");
+  $("workspace").classList.remove("hidden");
+  render(composeGraph(), true);
+}
+
+function showEmptyAfterRescan() {
+  rootID = "";
+  currentGraph = undefined;
+  baseRootNode = undefined;
+  expansionRecords = new Map();
+  expandedNodes = new Set();
+  $("workspace").classList.add("hidden");
+  $("reset-layout").classList.add("hidden");
+  $("empty").classList.remove("hidden");
+  $("empty").querySelector("h1").textContent = "That function is no longer in the codebase.";
+  $("empty").querySelector("p").textContent = "Search for another function to begin a refreshed graph.";
+  $("search").focus();
+}
+
+async function rescanCodebase() {
+  const previousLabel = rescanButton.textContent;
+  rescanButton.disabled = true;
+  rescanButton.textContent = "Scanning…";
+  try {
+    const result = await json("/api/rescan", { method: "POST" });
+    hideDetail();
+    hideResults();
+    if (rootID) {
+      try {
+        showLoadedGraph(await json(graphURL(rootID)));
+      } catch (error) {
+        if (error.status !== 404) throw error;
+        showEmptyAfterRescan();
+      }
+    } else if ($("search").value.trim()) {
+      await search();
+    }
+    const failures = result.load_report.failed_package_variants || result.load_report.FailedPackageVariants || 0;
+    rescanButton.textContent = failures ? `Rescanned (${failures} warnings)` : `Rescanned ${result.function_count}`;
+    setTimeout(() => { if (!rescanButton.disabled) rescanButton.textContent = previousLabel; }, 1800);
+  } catch (error) {
+    alert(error.message);
+    rescanButton.textContent = previousLabel;
+  } finally {
+    rescanButton.disabled = false;
+  }
 }
 
 function graphURL(id) {

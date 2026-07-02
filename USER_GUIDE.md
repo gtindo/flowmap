@@ -77,6 +77,12 @@ The server binds to localhost by default and is not exposed to other machines. S
 
 A new graph loads only one hop. This keeps large codebases readable.
 
+## Rescan after editing code
+
+Select **Rescan codebase** in the header after changing the target module. Flowmap rebuilds its analysis without stopping the server. If the current root still exists, the graph refreshes with the same direction, test, and view settings; transient node expansions and open details are cleared. If the root was removed, Flowmap returns to search.
+
+Flowmap continues serving the last successful scan while the new one is built. If rescanning fails because the source cannot be analyzed, the previous graph remains available and the browser reports the error.
+
 ## Navigate and expand
 
 - Select a node to open its detail panel.
