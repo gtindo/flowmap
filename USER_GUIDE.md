@@ -75,7 +75,11 @@ The server binds to localhost by default and is not exposed to other machines. S
 3. Choose **Downstream** to see callees, **Upstream** to see callers, or **Both directions**.
 4. Enable **Tests** to include test functions in search and graph results.
 
-A new graph loads only one hop. This keeps large codebases readable.
+A new graph loads only one hop. This keeps large codebases readable. The header places search beside the Flowmap logo and groups navigation, graph options, canvas tools, and utilities on the right. In narrower windows, the controls move to a second toolbar row so every action remains available.
+
+## Choose a color theme
+
+Flowmap follows the operating-system light or dark appearance by default. Use the theme selector in the header to choose **System**, **Light**, or **Dark**. A manual choice is saved in browser storage; **System** continues to react when the operating-system appearance changes.
 
 ## Rescan after editing code
 

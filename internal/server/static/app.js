@@ -26,6 +26,9 @@ let detailController;
 let activeDetailID;
 let activeDetailResize;
 const detailWidthKey = "flowmap-detail-width:v1";
+const themePreferenceKey = "flowmap-theme:v1";
+const themePreferences = new Set(["system", "light", "dark"]);
+const systemTheme = window.matchMedia("(prefers-color-scheme: dark)");
 const detailMinWidth = 320;
 const detailViewportMargin = 48;
 let preferredDetailWidth = readDetailWidth();
@@ -65,6 +68,26 @@ function sourceBlock(source) {
   const pre = node("pre", "source-code");
   pre.append(highlightGo(source));
   return pre;
+}
+
+function readThemePreference() {
+  try {
+    const preference = localStorage.getItem(themePreferenceKey);
+    return themePreferences.has(preference) ? preference : "system";
+  } catch (_) { return "system"; }
+}
+
+function applyTheme(preference) {
+  const resolved = preference === "system" ? (systemTheme.matches ? "dark" : "light") : preference;
+  document.documentElement.dataset.theme = resolved;
+  document.documentElement.dataset.themePreference = preference;
+  document.documentElement.style.colorScheme = resolved;
+}
+
+function selectTheme(event) {
+  const preference = themePreferences.has(event.target.value) ? event.target.value : "system";
+  try { localStorage.setItem(themePreferenceKey, preference); } catch (_) {}
+  applyTheme(preference);
 }
 
 function readDetailWidth() {
@@ -121,10 +144,15 @@ async function json(url, options) {
   return value;
 }
 
-const rescanButton = node("button", "", "Rescan codebase");
-rescanButton.id = "rescan";
-rescanButton.title = "Rebuild the codebase scan";
-document.querySelector(".controls").prepend(rescanButton);
+const rescanButton = $("rescan");
+const themeSelect = $("theme");
+const themePreference = readThemePreference();
+themeSelect.value = themePreference;
+applyTheme(themePreference);
+themeSelect.addEventListener("change", selectTheme);
+systemTheme.addEventListener("change", () => {
+  if (readThemePreference() === "system") applyTheme("system");
+});
 rescanButton.addEventListener("click", rescanCodebase);
 $("search").addEventListener("input", () => { clearTimeout(timer); timer = setTimeout(search, 150); });
 $("search").addEventListener("keydown", event => { if (event.key === "Escape") hideResults(); });

@@ -40,26 +40,29 @@ func TestHandlerServesNavigableGraphViews(t *testing.T) {
 	pageResponse := httptest.NewRecorder()
 	app.Handler().ServeHTTP(pageResponse, httptest.NewRequest(http.MethodGet, "/", nil))
 	page := pageResponse.Body.String()
-	for _, expected := range []string{"id=\"view\"", "value=\"simple\"", "id=\"history-back\"", "id=\"history-forward\"", "Back to previous function", "Forward to next function", "button:disabled", "id=\"reset-layout\"", "id=\"zoom-in\"", "id=\"zoom-out\"", "id=\"hand-tool\"", "id=\"detail-resize\"", "role=\"separator\"", "--detail-width", "#detail{width:var(--detail-width,min(520px,46vw));overflow:hidden;padding:0}", "#detail-content{width:100%;height:100%;overflow:auto;padding:25px}", "#close{right:22px;z-index:2}"} {
+	for _, expected := range []string{"class=\"app-header\"", "class=\"brand\"", "class=\"search-wrap\"", "class=\"controls\"", "aria-label=\"Navigation\"", "aria-label=\"Graph options\"", "aria-label=\"Canvas tools\"", "aria-label=\"Utilities\"", "id=\"view\"", "value=\"simple\"", "id=\"history-back\"", "id=\"history-forward\"", "Back to previous function", "Forward to next function", "id=\"reset-layout\"", "id=\"zoom-in\"", "id=\"zoom-out\"", "id=\"hand-tool\"", "id=\"rescan\"", "id=\"detail-resize\"", "role=\"separator\""} {
 		if !strings.Contains(page, expected) {
 			t.Fatalf("workbench page omitted %s", expected)
 		}
 	}
+	if strings.Contains(page, "<style>") {
+		t.Fatal("workbench page still contains inline component styles")
+	}
 	if strings.Contains(page, "id=\"depth\"") {
 		t.Fatal("workbench still exposes global depth expansion")
 	}
-	if strings.Contains(page, "#canvas-wrap{overflow:hidden}") {
-		t.Fatal("workbench page disables native graph scrolling")
-	}
 	styleResponse := httptest.NewRecorder()
 	app.Handler().ServeHTTP(styleResponse, httptest.NewRequest(http.MethodGet, "/style.css", nil))
-	if styleResponse.Code != http.StatusOK || !strings.Contains(styleResponse.Body.String(), "#canvas-wrap{height:calc(100% - 38px);overflow:auto") {
-		t.Fatal("workbench stylesheet does not enable graph overflow scrolling")
+	style := styleResponse.Body.String()
+	for _, expected := range []string{"--surface:", ":root[data-theme=\"dark\"]", ".app-header", ".control-group", "#canvas-wrap", "overflow: auto", "#detail", "width: var(--detail-width", "@media (max-width: 1480px)", "grid-template-areas: \"brand search .\" \"controls controls controls\""} {
+		if !strings.Contains(style, expected) {
+			t.Fatalf("workbench stylesheet omitted %s", expected)
+		}
 	}
 	scriptResponse := httptest.NewRecorder()
 	app.Handler().ServeHTTP(scriptResponse, httptest.NewRequest(http.MethodGet, "/app.js", nil))
 	script := scriptResponse.Body.String()
-	for _, expected := range []string{"startDrag", "pointerMoveThreshold = 4", "Math.hypot", "localStorage.setItem", "resetLayout", "flowmap-layout:v2:", "signedLevels", "step = -1", "centerRootInViewport", "normalizeLayout", "expansionSide", "focusGraph", "focusHistory", "focusHistoryIndex", "navigateHistory", "updateHistoryButtons", "graphGeneration", "options.historyIndex", "expandNode", "collapseNode", "pruneOrphanedExpansions", "zoomGraph", "startPan", "scrollLeft", "scrollTop", "zoomScale", "viewportState", "viewportCenter", "scrollViewportTo", "marginX = wrap.clientWidth", "marginY = wrap.clientHeight", "-marginX / zoomScale", "-marginY / zoomScale", "&depth=1", "highlightGo", "sourceBlock(item.source)", "detailGeneration", "activeDetailID", "setActiveDetail", "detail-selected", "detail-focus-ring", "AbortController", "Loading details…", "Unable to load details", "hideDetail", "item.contracts || []", "item.classification.evidence || []", "expansionActivationWindow = 400", "expansionActivationTimes", "flowmap-detail-width:v1", "startDetailResize", "resizeDetail", "finishDetailResize", "clampDetailWidth", "detailViewportMargin = 48", "Rescan codebase", "rescanCodebase", "showEmptyAfterRescan", "Scanning…", "POST"} {
+	for _, expected := range []string{"startDrag", "pointerMoveThreshold = 4", "Math.hypot", "localStorage.setItem", "resetLayout", "flowmap-layout:v2:", "signedLevels", "step = -1", "centerRootInViewport", "normalizeLayout", "expansionSide", "focusGraph", "focusHistory", "focusHistoryIndex", "navigateHistory", "updateHistoryButtons", "graphGeneration", "options.historyIndex", "expandNode", "collapseNode", "pruneOrphanedExpansions", "zoomGraph", "startPan", "scrollLeft", "scrollTop", "zoomScale", "viewportState", "viewportCenter", "scrollViewportTo", "marginX = wrap.clientWidth", "marginY = wrap.clientHeight", "-marginX / zoomScale", "-marginY / zoomScale", "&depth=1", "highlightGo", "sourceBlock(item.source)", "detailGeneration", "activeDetailID", "setActiveDetail", "detail-selected", "detail-focus-ring", "AbortController", "Loading details…", "Unable to load details", "hideDetail", "item.contracts || []", "item.classification.evidence || []", "expansionActivationWindow = 400", "expansionActivationTimes", "flowmap-detail-width:v1", "startDetailResize", "resizeDetail", "finishDetailResize", "clampDetailWidth", "detailViewportMargin = 48", "rescanCodebase", "showEmptyAfterRescan", "Scanning…", "POST"} {
 		if !strings.Contains(script, expected) {
 			t.Fatalf("workbench script omitted %s", expected)
 		}
@@ -68,13 +71,34 @@ func TestHandlerServesNavigableGraphViews(t *testing.T) {
 		t.Fatal("workbench still focuses graph nodes on double-click")
 	}
 	for _, expected := range []string{".token.comment", ".token.keyword", ".token.builtin", ".token.string", ".token.number"} {
-		if !strings.Contains(styleResponse.Body.String(), expected) {
+		if !strings.Contains(style, expected) {
 			t.Fatalf("workbench stylesheet omitted %s", expected)
 		}
 	}
-	for _, expected := range []string{".node rect.detail-focus-ring", ".node.detail-selected rect.detail-focus-ring", "stroke:#2563eb"} {
-		if !strings.Contains(styleResponse.Body.String(), expected) {
+	for _, expected := range []string{".node rect.detail-focus-ring", ".node.detail-selected rect.detail-focus-ring", "stroke: var(--focus)"} {
+		if !strings.Contains(style, expected) {
 			t.Fatalf("workbench stylesheet omitted %s", expected)
+		}
+	}
+}
+
+func TestHandlerServesPersistentSystemAwareThemes(t *testing.T) {
+	app, _ := New(fixtureIndex(), nil, nil)
+	pageResponse := httptest.NewRecorder()
+	app.Handler().ServeHTTP(pageResponse, httptest.NewRequest(http.MethodGet, "/", nil))
+	page := pageResponse.Body.String()
+	for _, expected := range []string{"flowmap-theme:v1", "matchMedia(\"(prefers-color-scheme: dark)\")", "dataset.theme = resolved", "value=\"system\"", "value=\"light\"", "value=\"dark\""} {
+		if !strings.Contains(page, expected) {
+			t.Fatalf("theme bootstrap omitted %s", expected)
+		}
+	}
+
+	scriptResponse := httptest.NewRecorder()
+	app.Handler().ServeHTTP(scriptResponse, httptest.NewRequest(http.MethodGet, "/app.js", nil))
+	script := scriptResponse.Body.String()
+	for _, expected := range []string{"flowmap-theme:v1", "readThemePreference", "applyTheme", "selectTheme", "systemTheme.addEventListener(\"change\"", "localStorage.setItem(themePreferenceKey", "dataset.themePreference"} {
+		if !strings.Contains(script, expected) {
+			t.Fatalf("theme behavior omitted %s", expected)
 		}
 	}
 }
