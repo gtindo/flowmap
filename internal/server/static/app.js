@@ -19,6 +19,7 @@ let expansionActivationTimes = new Map();
 let baseRootNode;
 let detailGeneration = 0;
 let detailController;
+let activeDetailID;
 
 function node(tag, cls, text) {
   const value = document.createElement(tag);
@@ -255,15 +256,21 @@ function drawEdges() {
 
 function drawNode(item, position, isRoot, simple) {
   const group = document.createElementNS(ns, "g");
-  group.setAttribute("class", "node " + item.classification.kind + (isRoot ? " root" : "") + (simple ? " simple" : ""));
+  group.setAttribute("class", "node " + item.classification.kind + (isRoot ? " root" : "") + (simple ? " simple" : "") + (item.id === activeDetailID ? " detail-selected" : ""));
   group.setAttribute("transform", "translate(" + position.x + " " + position.y + ")");
   group.dataset.id = item.id;
   const title = document.createElementNS(ns, "title");
   title.textContent = item.qualified_name;
+  const focusRing = document.createElementNS(ns, "rect");
+  focusRing.setAttribute("class", "detail-focus-ring");
+  focusRing.setAttribute("x", -5);
+  focusRing.setAttribute("y", -5);
+  focusRing.setAttribute("width", currentSize.width + 10);
+  focusRing.setAttribute("height", currentSize.height + 10);
   const rect = document.createElementNS(ns, "rect");
   rect.setAttribute("width", currentSize.width);
   rect.setAttribute("height", currentSize.height);
-  group.append(title, rect);
+  group.append(title, focusRing, rect);
   if (simple) {
     addText(group, item.name, 10, 29, "name", 26);
   } else {
@@ -342,6 +349,7 @@ function collapseNode(id) {
   expandedNodes.delete(id);
   pruneOrphanedExpansions();
   currentGraph = composeGraph();
+  if (activeDetailID && !currentGraph.nodes.some(item => item.id === activeDetailID)) hideDetail();
   const visible = new Set(currentGraph.nodes.map(item => item.id));
   for (const nodeID of currentPositions.keys()) if (!visible.has(nodeID)) currentPositions.delete(nodeID);
   resizeCanvas(false);
@@ -480,11 +488,13 @@ function hideDetail() {
   detailGeneration++;
   if (detailController) detailController.abort();
   detailController = undefined;
+  setActiveDetail(undefined);
   $("detail").classList.add("hidden");
 }
 
 async function showDetail(id) {
   if (detailController) detailController.abort();
+  setActiveDetail(id);
   const generation = ++detailGeneration;
   const controller = new AbortController();
   detailController = controller;
@@ -501,6 +511,13 @@ async function showDetail(id) {
   } finally {
     if (detailController === controller) detailController = undefined;
   }
+}
+
+function setActiveDetail(id) {
+  activeDetailID = id;
+  document.querySelectorAll("#nodes .node").forEach(group => {
+    group.classList.toggle("detail-selected", group.dataset.id === activeDetailID);
+  });
 }
 
 function renderDetail(item) {

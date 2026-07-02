@@ -57,12 +57,17 @@ func TestHandlerServesNavigableGraphViews(t *testing.T) {
 	scriptResponse := httptest.NewRecorder()
 	app.Handler().ServeHTTP(scriptResponse, httptest.NewRequest(http.MethodGet, "/app.js", nil))
 	script := scriptResponse.Body.String()
-	for _, expected := range []string{"startDrag", "pointerMoveThreshold = 4", "Math.hypot", "localStorage.setItem", "resetLayout", "flowmap-layout:", "focusGraph", "expandNode", "collapseNode", "pruneOrphanedExpansions", "zoomGraph", "startPan", "scrollLeft", "scrollTop", "zoomScale", "&depth=1", "highlightGo", "sourceBlock(item.source)", "detailGeneration", "AbortController", "Loading details…", "Unable to load details", "hideDetail", "item.contracts || []", "item.classification.evidence || []", "expansionActivationWindow = 400", "expansionActivationTimes", "event.target.closest(\".expand-control\")", "addEventListener(\"dblclick\""} {
+	for _, expected := range []string{"startDrag", "pointerMoveThreshold = 4", "Math.hypot", "localStorage.setItem", "resetLayout", "flowmap-layout:", "focusGraph", "expandNode", "collapseNode", "pruneOrphanedExpansions", "zoomGraph", "startPan", "scrollLeft", "scrollTop", "zoomScale", "&depth=1", "highlightGo", "sourceBlock(item.source)", "detailGeneration", "activeDetailID", "setActiveDetail", "detail-selected", "detail-focus-ring", "AbortController", "Loading details…", "Unable to load details", "hideDetail", "item.contracts || []", "item.classification.evidence || []", "expansionActivationWindow = 400", "expansionActivationTimes", "event.target.closest(\".expand-control\")", "addEventListener(\"dblclick\""} {
 		if !strings.Contains(script, expected) {
 			t.Fatalf("workbench script omitted %s", expected)
 		}
 	}
 	for _, expected := range []string{".token.comment", ".token.keyword", ".token.builtin", ".token.string", ".token.number"} {
+		if !strings.Contains(styleResponse.Body.String(), expected) {
+			t.Fatalf("workbench stylesheet omitted %s", expected)
+		}
+	}
+	for _, expected := range []string{".node rect.detail-focus-ring", ".node.detail-selected rect.detail-focus-ring", "stroke:#2563eb"} {
 		if !strings.Contains(styleResponse.Body.String(), expected) {
 			t.Fatalf("workbench stylesheet omitted %s", expected)
 		}
