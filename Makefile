@@ -1,4 +1,4 @@
-VERSION ?= 0.5.0
+VERSION ?= 0.6.0
 VERSION_NUMBER := $(patsubst v%,%,$(VERSION))
 RELEASE_VERSION := v$(VERSION_NUMBER)
 BINARY := flowmap
