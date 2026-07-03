@@ -28,6 +28,11 @@ func TestHandlerServesSearchGraphAndDetails(t *testing.T) {
 			t.Fatalf("GET %s status = %d body = %s", path, response.Code, response.Body.String())
 		}
 	}
+	graphResponse := httptest.NewRecorder()
+	app.Handler().ServeHTTP(graphResponse, httptest.NewRequest(http.MethodGet, "/api/graph?root=root&direction=downstream&depth=1", nil))
+	if !strings.Contains(graphResponse.Body.String(), `"kind":"call"`) || !strings.Contains(graphResponse.Body.String(), `"anonymous":true`) {
+		t.Fatalf("graph omitted edge or closure metadata: %s", graphResponse.Body.String())
+	}
 	response := httptest.NewRecorder()
 	app.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/functions/root/summary", nil))
 	if response.Code != http.StatusNotImplemented {
@@ -66,7 +71,7 @@ func TestHandlerServesNavigableGraphViews(t *testing.T) {
 	styleResponse := httptest.NewRecorder()
 	app.Handler().ServeHTTP(styleResponse, httptest.NewRequest(http.MethodGet, "/style.css", nil))
 	style := styleResponse.Body.String()
-	for _, expected := range []string{"--surface:", ":root[data-theme=\"dark\"]", ".app-header", ".control-group", ".git-review", ".changes-menu", ".change-item", ".diff-addition", ".diff-deletion", "#canvas-wrap", "overflow: auto", "#detail", "width: var(--detail-width", "@media (max-width: 1480px)", "grid-template-areas: \"brand search .\" \"controls controls controls\""} {
+	for _, expected := range []string{"--surface:", ":root[data-theme=\"dark\"]", ".app-header", ".control-group", ".git-review", ".changes-menu", ".change-item", ".diff-addition", ".diff-deletion", ".node .name.new { fill: var(--change-new); }", ".node .name.updated { fill: var(--change-updated); }", "#edges path.dependency", "stroke-dasharray: 2 5", "#canvas-wrap", "overflow: auto", "#detail", "width: var(--detail-width", "@media (max-width: 1480px)", "grid-template-areas: \"brand search .\" \"controls controls controls\""} {
 		if !strings.Contains(style, expected) {
 			t.Fatalf("workbench stylesheet omitted %s", expected)
 		}
@@ -74,7 +79,7 @@ func TestHandlerServesNavigableGraphViews(t *testing.T) {
 	scriptResponse := httptest.NewRecorder()
 	app.Handler().ServeHTTP(scriptResponse, httptest.NewRequest(http.MethodGet, "/app.js", nil))
 	script := scriptResponse.Body.String()
-	for _, expected := range []string{"startDrag", "pointerMoveThreshold = 4", "Math.hypot", "localStorage.setItem", "resetLayout", "flowmap-layout:v2:", "signedLevels", "step = -1", "centerRootInViewport", "normalizeLayout", "expansionSide", "focusGraph", "focusHistory", "focusHistoryIndex", "navigateHistory", "updateHistoryButtons", "graphGeneration", "options.historyIndex", "expandNode", "collapseNode", "pruneOrphanedExpansions", "zoomGraph", "startPan", "scrollLeft", "scrollTop", "zoomScale", "viewportState", "viewportCenter", "scrollViewportTo", "marginX = wrap.clientWidth", "marginY = wrap.clientHeight", "-marginX / zoomScale", "-marginY / zoomScale", "&depth=1", "highlightGo", "sourceBlock(item.source)", "source-heading", "diffBlock", "diff-addition", "loadGitStatus", "/api/git-status", "visibleChangedFunctions", "toggleChangesMenu", "hideChangesMenu", "renderGitStatus(result.git_status)", "item.change", "Show diff", "Show source", "aria-pressed", "detailGeneration", "activeDetailID", "setActiveDetail", "detail-selected", "detail-focus-ring", "AbortController", "Loading details…", "Unable to load details", "hideDetail", "item.contracts || []", "item.classification.evidence || []", "expansionActivationWindow = 400", "expansionActivationTimes", "flowmap-detail-width:v1", "startDetailResize", "resizeDetail", "finishDetailResize", "clampDetailWidth", "detailViewportMargin = 48", "rescanCodebase", "showEmptyAfterRescan", "Scanning…", "POST"} {
+	for _, expected := range []string{"startDrag", "pointerMoveThreshold = 4", "Math.hypot", "localStorage.setItem", "resetLayout", "flowmap-layout:v2:", "signedLevels", "step = -1", "centerRootInViewport", "normalizeLayout", "expansionSide", "focusGraph", "focusHistory", "focusHistoryIndex", "navigateHistory", "updateHistoryButtons", "graphGeneration", "options.historyIndex", "expandNode", "collapseNode", "pruneOrphanedExpansions", "zoomGraph", "startPan", "scrollLeft", "scrollTop", "zoomScale", "viewportState", "viewportCenter", "scrollViewportTo", "marginX = wrap.clientWidth", "marginY = wrap.clientHeight", "-marginX / zoomScale", "-marginY / zoomScale", "&depth=1", "highlightGo", "sourceBlock(item.source)", "source-heading", "diffBlock", "diff-addition", "loadGitStatus", "/api/git-status", "visibleChangedFunctions", "toggleChangesMenu", "hideChangesMenu", "renderGitStatus(result.git_status)", "item.change", "const nameClass = \"name\" + (changeKind ? \" \" + changeKind : \"\")", "in Git diff", "edge.kind === \"dependency\"", "Function dependency", "Show diff", "Show source", "aria-pressed", "detailGeneration", "activeDetailID", "setActiveDetail", "detail-selected", "detail-focus-ring", "AbortController", "Loading details…", "Unable to load details", "hideDetail", "item.contracts || []", "item.classification.evidence || []", "expansionActivationWindow = 400", "expansionActivationTimes", "flowmap-detail-width:v1", "startDetailResize", "resizeDetail", "finishDetailResize", "clampDetailWidth", "detailViewportMargin = 48", "rescanCodebase", "showEmptyAfterRescan", "Scanning…", "POST"} {
 		if !strings.Contains(script, expected) {
 			t.Fatalf("workbench script omitted %s", expected)
 		}
@@ -324,8 +329,8 @@ func TestSummaryEndpointMarksGeneratedIntent(t *testing.T) {
 // fixtureIndex returns a minimal immutable graph for HTTP tests.
 func fixtureIndex() *analyzer.Index {
 	root := analyzer.Function{ID: "root", QualifiedName: "sample.Root", Package: "sample", File: "/work/sample.go", Line: 10, Classification: analyzer.Classification{Kind: "pure"}, Change: &analyzer.FunctionChange{Kind: "updated", Diff: "--- a/sample.go\n+++ b/sample.go\n@@ -1 +1 @@\n-old\n+new\n"}}
-	child := analyzer.Function{ID: "child", QualifiedName: "sample.Child", Package: "sample", Classification: analyzer.Classification{Kind: "unknown"}}
-	edge := analyzer.Edge{CallerID: "root", CalleeID: "child"}
+	child := analyzer.Function{ID: "child", Name: "Root$1", QualifiedName: "sample.Root$1", Package: "sample", Anonymous: true, Classification: analyzer.Classification{Kind: "unknown"}}
+	edge := analyzer.Edge{CallerID: "root", CalleeID: "child", Kind: "call"}
 	gitStatus := analyzer.GitSnapshot{Available: true, Branch: "main", Revision: "1234567890", ChangedFunctions: []analyzer.ChangedFunction{{ID: "root", QualifiedName: "sample.Root", Package: "sample", File: root.File, Line: root.Line, Kind: "updated"}}}
 	return &analyzer.Index{Functions: map[string]analyzer.Function{"root": root, "child": child}, Edges: []analyzer.Edge{edge}, Outgoing: map[string][]analyzer.Edge{"root": {edge}}, Incoming: map[string][]analyzer.Edge{"child": {edge}}, Git: gitStatus}
 }

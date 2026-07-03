@@ -1,8 +1,8 @@
 # Flowmap User Guide
 
-Flowmap is a local, read-only workbench for understanding Go code through focused function-call graphs. It combines possible call relationships with signatures, data contracts, source-authored intent, source excerpts, test visibility, and evidence-based functional-core/imperative-shell classification.
+Flowmap is a local, read-only workbench for understanding Go code through focused function-call and dependency graphs. It combines possible call relationships with signatures, data contracts, source-authored intent, source excerpts, test visibility, and evidence-based functional-core/imperative-shell classification.
 
-Flowmap performs static analysis. An edge means a function may call another function; it does not prove that the call occurs for a particular runtime input.
+Flowmap performs static analysis. A call edge means a function may call another function; a dependency edge means a local function is passed as an argument. Neither proves runtime execution for a particular input.
 
 The current online version of this guide is published at <https://gtindo.github.io/flowmap/>.
 
@@ -88,6 +88,8 @@ The installed app is tied to the exact address used during installation. If you 
 
 A new graph loads only one hop. This keeps large codebases readable. The header places search beside the Flowmap logo and groups navigation, graph options, canvas tools, and utilities on the right. In narrower windows, the controls move to a second toolbar row so every action remains available.
 
+Anonymous functions are shown as graph nodes when they are called or passed by a visible function. They can be inspected, expanded, and focused like other nodes, but are omitted from search and Git change lists.
+
 ## Choose a color theme
 
 Flowmap follows the operating-system light or dark appearance by default. Use the theme selector in the header to choose **System**, **Light**, or **Dark**. A manual choice is saved in browser storage; **System** continues to react when the operating-system appearance changes.
@@ -100,7 +102,7 @@ Flowmap continues serving the last successful scan while the new one is built. I
 
 When the module is inside a Git repository, Flowmap also snapshots the current branch and local function changes during each successful scan. The branch label and change list therefore describe the code shown by Flowmap; switching branches or editing files does not alter them until the next rescan. Detached checkouts display their abbreviated commit instead of a branch name.
 
-Select **Changes** in the header to review functions that differ from `HEAD`. This includes staged changes, unstaged changes, and functions in non-ignored untracked Go files. The list labels declarations as new or updated, follows the **Tests** toggle, and is sorted by qualified function name. Selecting an entry focuses its graph and opens its details. Deleted functions are not listed because they are absent from the current scan.
+Select **Changes** in the header to review functions that differ from `HEAD`. This includes staged changes, unstaged changes, and functions in non-ignored untracked Go files. The list labels declarations as new or updated, follows the **Tests** toggle, and is sorted by qualified function name. Graph node titles use the same status: blue indicates a new function and yellow/amber indicates an updated function; hovering the node also includes the status in its tooltip. Selecting an entry focuses its graph and opens its details. Deleted functions are not listed because they are absent from the current scan.
 
 ## Navigate and expand
 
@@ -147,7 +149,7 @@ Classification is one of:
 
 Authored classifications take precedence. Inferred classifications always show their evidence and should be treated as navigation help rather than formal proof.
 
-Dashed edges represent possible interface or dynamic-dispatch targets. Solid edges represent statically resolved calls.
+Solid edges represent statically resolved calls. Dashed edges represent possible interface or dynamic-dispatch targets. Dotted edges represent local functions passed as arguments, such as HTTP handler registration; these dependencies do not imply that the registering function invokes the callback.
 
 ## Optional generated intent
 

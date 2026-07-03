@@ -19,6 +19,17 @@ type Store interface {
 	Save(context.Context, Output) error
 }
 
+// Router registers variadic HTTP callbacks.
+type Router interface {
+	GET(string, ...func())
+}
+
+// CallbackOwner supplies a method value callback.
+type CallbackOwner struct{}
+
+// Handle is a method-value callback fixture.
+func (CallbackOwner) Handle() {}
+
 // Run coordinates normalization and persistence.
 // Side Effect (Edge): persists through the supplied store.
 func Run(ctx context.Context, store Store, input Input) (Output, error) {
@@ -51,6 +62,39 @@ func AssemblyPure()
 
 // CallDependency exercises a vendored dependency outside the local graph.
 func CallDependency() { dependency.External() }
+
+var serverErrors = make(chan error, 1)
+
+// StartWorker starts an anonymous goroutine that reports the server result.
+func StartWorker() {
+	go func() {
+		serverErrors <- startHTTPServer()
+	}()
+}
+
+func startHTTPServer() error { return nil }
+
+// HandleSomething is a direct callback fixture.
+func HandleSomething() {}
+
+// GenericCallback is an instantiated callback fixture.
+func GenericCallback[T any]() {}
+
+// RegisterCallback accepts one callback without invoking it.
+func RegisterCallback(func()) {}
+
+// RegisterCallbacks exercises direct, method, generic, variadic, and literal dependencies.
+func RegisterCallbacks(routes Router, owner CallbackOwner) {
+	routes.GET("/", HandleSomething)
+	RegisterCallback(owner.Handle)
+	routes.GET("/more", GenericCallback[string], func() {})
+}
+
+// SideEffectCallback is deliberately effectful but is only registered below.
+func SideEffectCallback() { _, _ = os.ReadFile("callback") }
+
+// RegisterSideEffectCallback must not inherit effects through a dependency edge.
+func RegisterSideEffectCallback() { RegisterCallback(SideEffectCallback) }
 
 // Repeat recursively repeats a string.
 func Repeat(value string, count int) string {

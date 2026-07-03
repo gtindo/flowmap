@@ -27,6 +27,14 @@ func TestAnalyzeBuildsTypedFocusedGraph(t *testing.T) {
 	assemblyHook := findFunction(t, index, ".AssemblyHook")
 	assemblyPure := findFunction(t, index, ".AssemblyPure")
 	callDependency := findFunction(t, index, ".CallDependency")
+	startWorker := findFunction(t, index, ".StartWorker")
+	startHTTPServer := findFunction(t, index, ".startHTTPServer")
+	handleSomething := findFunction(t, index, ".HandleSomething")
+	callbackOwnerHandle := findFunction(t, index, ".Handle")
+	genericCallback := findFunction(t, index, ".GenericCallback")
+	registerCallbacks := findFunction(t, index, ".RegisterCallbacks")
+	sideEffectCallback := findFunction(t, index, ".SideEffectCallback")
+	registerSideEffectCallback := findFunction(t, index, ".RegisterSideEffectCallback")
 	if run.Classification.Kind != classificationEdge || run.Classification.Provenance != provenanceAuthored {
 		t.Fatalf("Run classification = %#v", run.Classification)
 	}
@@ -44,6 +52,28 @@ func TestAnalyzeBuildsTypedFocusedGraph(t *testing.T) {
 	}
 	if callDependency.Classification.Kind != classificationUnknown || !strings.Contains(strings.Join(callDependency.Classification.Evidence, " "), "effect-unknown") {
 		t.Fatalf("CallDependency classification = %#v", callDependency.Classification)
+	}
+	workerClosure := findAnonymousFunction(t, index, ".StartWorker$1")
+	if !strings.Contains(workerClosure.Source, "serverErrors <- startHTTPServer()") || workerClosure.Classification.Kind != classificationEdge {
+		t.Fatalf("worker closure metadata = %#v", workerClosure)
+	}
+	assertEdge(t, index, startWorker.ID, workerClosure.ID, edgeKindCall)
+	assertEdge(t, index, workerClosure.ID, startHTTPServer.ID, edgeKindCall)
+	assertEdge(t, index, registerCallbacks.ID, handleSomething.ID, edgeKindDependency)
+	assertEdge(t, index, registerCallbacks.ID, callbackOwnerHandle.ID, edgeKindDependency)
+	assertEdge(t, index, registerCallbacks.ID, genericCallback.ID, edgeKindDependency)
+	registerClosure := findAnonymousFunction(t, index, ".RegisterCallbacks$1")
+	assertEdge(t, index, registerCallbacks.ID, registerClosure.ID, edgeKindDependency)
+	assertEdge(t, index, registerSideEffectCallback.ID, sideEffectCallback.ID, edgeKindDependency)
+	if registerSideEffectCallback.Classification.Kind != classificationPure {
+		t.Fatalf("dependency affected caller classification = %#v", registerSideEffectCallback.Classification)
+	}
+	if got := index.Search("StartWorker", true, 10); len(got) != 1 || got[0].ID != startWorker.ID {
+		t.Fatalf("anonymous function leaked into search = %#v", got)
+	}
+	workerGraph, err := index.Focus(startWorker.ID, "downstream", 2, false)
+	if err != nil || !graphHasNode(workerGraph, workerClosure.ID) || !graphHasNode(workerGraph, startHTTPServer.ID) {
+		t.Fatalf("worker graph = %#v, %v", workerGraph, err)
 	}
 	for _, function := range index.Functions {
 		if function.Package == "example.com/dependency" {
@@ -69,6 +99,27 @@ func TestAnalyzeBuildsTypedFocusedGraph(t *testing.T) {
 	if got := index.Search("TestNormalize", true, 10); len(got) != 1 || !got[0].Test {
 		t.Fatalf("visible test search = %#v", got)
 	}
+}
+
+func findAnonymousFunction(t *testing.T, index *Index, suffix string) Function {
+	t.Helper()
+	for _, function := range index.Functions {
+		if function.Anonymous && strings.HasSuffix(function.QualifiedName, suffix) {
+			return function
+		}
+	}
+	t.Fatalf("anonymous function ending %q not found", suffix)
+	return Function{}
+}
+
+func assertEdge(t *testing.T, index *Index, callerID string, calleeID string, kind string) {
+	t.Helper()
+	for _, edge := range index.Edges {
+		if edge.CallerID == callerID && edge.CalleeID == calleeID && edge.Kind == kind {
+			return
+		}
+	}
+	t.Fatalf("edge %s -> %s (%s) not found in %#v", callerID, calleeID, kind, index.Edges)
 }
 
 func TestAnalyzeReportsDiagnosticsWhenEveryPackageIsBroken(t *testing.T) {

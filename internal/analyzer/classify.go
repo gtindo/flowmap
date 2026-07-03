@@ -26,7 +26,7 @@ var knownPurePackages = map[string]bool{
 }
 
 // classifyDirect records authored labels and locally visible effect evidence.
-func classifyDirect(declaration *ast.FuncDecl, typeInfo *types.Info, documentation string) (Classification, bool, bool) {
+func classifyDirect(body *ast.BlockStmt, typeInfo *types.Info, documentation string) (Classification, bool, bool) {
 	normalizedDocumentation := strings.ToLower(documentation)
 	if strings.Contains(normalizedDocumentation, "operations (pure)") {
 		return Classification{Kind: classificationPure, Provenance: provenanceAuthored, Evidence: []string{"function documentation declares Operations (Pure)"}}, false, false
@@ -35,14 +35,17 @@ func classifyDirect(declaration *ast.FuncDecl, typeInfo *types.Info, documentati
 		return Classification{Kind: classificationEdge, Provenance: provenanceAuthored, Evidence: []string{"function documentation declares Side Effect (Edge)"}}, true, false
 	}
 	// Assembly- and linker-backed declarations have effects that Go syntax cannot reveal.
-	if declaration.Body == nil {
+	if body == nil {
 		return Classification{Kind: classificationUnknown, Provenance: provenanceInferred}, false, true
 	}
 
 	evidence := make(map[string]bool)
 	externalCall := false
-	ast.Inspect(declaration.Body, func(node ast.Node) bool {
+	ast.Inspect(body, func(node ast.Node) bool {
 		switch typed := node.(type) {
+		case *ast.FuncLit:
+			// A nested function owns the effects in its body.
+			return false
 		case *ast.GoStmt:
 			evidence["starts a goroutine"] = true
 		case *ast.SendStmt:
@@ -121,6 +124,9 @@ func isEdgePackage(packagePath string) bool {
 // classifyFunctions propagates inferred purity only through fully known local calls.
 func classifyFunctions(metas map[string]*functionMeta, edges []Edge) {
 	for _, edge := range edges {
+		if edge.Kind != edgeKindCall {
+			continue
+		}
 		metas[edge.CallerID].localCalls = append(metas[edge.CallerID].localCalls, edge.CalleeID)
 	}
 

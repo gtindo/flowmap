@@ -71,6 +71,12 @@ func NewUntracked() {}
 `)
 
 	functions := testFunctionsFromFiles(t, project, "sample.go", "sample_test.go", "space name.go", "untracked.go")
+	existingFunction := findTestFunctionByName(t, functions, "sample.Existing")
+	functions["anonymous"] = Function{
+		ID: "anonymous", Name: "Existing$1", QualifiedName: "sample.Existing$1",
+		Package: "sample", File: existingFunction.File, Line: existingFunction.Line,
+		EndLine: existingFunction.EndLine, Anonymous: true,
+	}
 	snapshot := captureGitSnapshot(context.Background(), project, functions)
 	if !snapshot.Available || snapshot.Branch != "feature/review" || snapshot.Detached || snapshot.Revision == "" {
 		t.Fatalf("Git snapshot = %#v", snapshot)

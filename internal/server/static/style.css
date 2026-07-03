@@ -460,6 +460,7 @@ main {
 #arrow path { fill: var(--graph-edge); }
 #edges path { fill: none; stroke: var(--graph-edge); stroke-width: 1.35; marker-end: url(#arrow); }
 #edges path.dynamic { stroke-dasharray: 7 5; }
+#edges path.dependency { stroke-dasharray: 2 5; }
 
 .node { cursor: grab; }
 .node.dragging { cursor: grabbing; }
@@ -469,6 +470,8 @@ main {
 .node.detail-selected rect.detail-focus-ring { visibility: visible; }
 .node text { fill: var(--text); pointer-events: none; }
 .node .name { fill: var(--text-strong); font-size: 12px; font-weight: 650; }
+.node .name.new { fill: var(--change-new); }
+.node .name.updated { fill: var(--change-updated); }
 .node.simple .name { font-size: 11px; }
 .node .pkg,
 .node .intent { fill: var(--text-muted); font-size: 10px; }

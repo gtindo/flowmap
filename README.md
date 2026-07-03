@@ -2,7 +2,7 @@
 
 Flowmap is a local static code-reading workbench for Go. Start from one function and explore a focused caller/callee neighborhood enriched with typed inputs, outputs, named data contracts, authored intent, source, test reachability, and evidence-based functional-core/imperative-shell classification.
 
-Flowmap displays possible static calls. It does not claim that an edge executes at runtime or expose runtime values.
+Flowmap displays possible static calls and function dependencies. It does not claim that an edge executes at runtime or expose runtime values.
 
 For installation and complete usage instructions, see [USER_GUIDE.md](USER_GUIDE.md) or the [Flowmap documentation site](https://gtindo.github.io/flowmap/).
 
@@ -16,7 +16,7 @@ Open `http://127.0.0.1:7878`, search for a function, and choose upstream, downst
 
 To keep Flowmap in the macOS Dock, open the running workbench in Safari and choose **File > Add to Dock**, or use **Install Flowmap** in Chrome. The installed web app uses the same host and port and does not start the Flowmap server; see the [user guide](USER_GUIDE.md#add-flowmap-to-the-macos-dock) for details.
 
-Tests are indexed but hidden until the **Tests** toggle is enabled. Anonymous functions and non-local packages stay outside the visible graph. Dashed edges are interface/dynamic-dispatch candidates rather than definite static calls.
+Tests are indexed but hidden until the **Tests** toggle is enabled. Anonymous functions appear when traversing their named parents but stay out of search and Git change lists; non-local packages remain outside the visible graph. Dashed edges are interface/dynamic-dispatch candidates, while dotted edges show local functions passed as arguments.
 
 ## Navigate the graph
 

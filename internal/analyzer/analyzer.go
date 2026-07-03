@@ -29,11 +29,18 @@ type Config struct {
 
 type functionMeta struct {
 	ssaFunction  *ssa.Function
+	syntax       ast.Node
+	typeInfo     *types.Info
 	function     Function
 	directEdge   bool
 	localCalls   []string
 	externalCall bool
 }
+
+const (
+	edgeKindCall       = "call"
+	edgeKindDependency = "dependency"
+)
 
 // Analyze loads a Go working tree and returns its typed local call graph.
 func Analyze(ctx context.Context, config Config) (*Index, error) {
@@ -82,12 +89,12 @@ func Analyze(ctx context.Context, config Config) (*Index, error) {
 	packageByTypes := packagesByTypes(healthyPackages)
 	metas := collectFunctions(root, program, ssaPackages, packageByTypes)
 	if len(metas) == 0 {
-		return nil, fmt.Errorf("analyze Go packages: no local named functions found beneath %s", root)
+		return nil, fmt.Errorf("analyze Go packages: no local functions found beneath %s", root)
 	}
 
 	initialGraph := cha.CallGraph(program)
 	callGraph := vta.CallGraph(ssautil.AllFunctions(program), initialGraph)
-	edges := collectEdges(root, callGraph.Nodes, metas)
+	edges := collectEdges(callGraph.Nodes, metas)
 	classifyFunctions(metas, edges)
 
 	index := &Index{
@@ -116,7 +123,7 @@ func packagesByTypes(roots []*packages.Package) map[*types.Package]*packages.Pac
 	return result
 }
 
-// collectFunctions converts named local SSA functions into stable browser records.
+// collectFunctions converts named and anonymous local SSA functions into stable browser records.
 func collectFunctions(root string, program *ssa.Program, ssaPackages []*ssa.Package, packageByTypes map[*types.Package]*packages.Package) map[string]*functionMeta {
 	// AllFunctions includes dependencies; ssaPackages contains only the roots selected by ./....
 	localPackages := make(map[*ssa.Package]bool, len(ssaPackages))
@@ -127,12 +134,17 @@ func collectFunctions(root string, program *ssa.Program, ssaPackages []*ssa.Pack
 	}
 	result := make(map[string]*functionMeta)
 	for ssaFunction := range ssautil.AllFunctions(program) {
-		declaration, isDeclaration := ssaFunction.Syntax().(*ast.FuncDecl)
-		if !isDeclaration || declaration.Name == nil || ssaFunction.Pkg == nil || !localPackages[ssaFunction.Pkg] {
+		syntax := ssaFunction.Syntax()
+		declaration, isDeclaration := syntax.(*ast.FuncDecl)
+		literal, isLiteral := syntax.(*ast.FuncLit)
+		if (!isDeclaration && !isLiteral) || ssaFunction.Pkg == nil || !localPackages[ssaFunction.Pkg] {
 			continue
 		}
-		position := program.Fset.PositionFor(declaration.Pos(), true)
-		endPosition := program.Fset.PositionFor(declaration.End(), true)
+		if isDeclaration && declaration.Name == nil {
+			continue
+		}
+		position := program.Fset.PositionFor(syntax.Pos(), true)
+		endPosition := program.Fset.PositionFor(syntax.End(), true)
 		if !isLocalFile(root, position.Filename) {
 			continue
 		}
@@ -147,16 +159,28 @@ func collectFunctions(root string, program *ssa.Program, ssaPackages []*ssa.Pack
 		}
 		signature := ssaFunction.Signature
 		qualifiedName := functionName(ssaFunction, signature)
+		if isLiteral {
+			qualifiedName = ssaFunction.String()
+		}
 		id := stableFunctionID(ssaFunction)
 		fullDocumentation := ""
-		if declaration.Doc != nil {
+		var body *ast.BlockStmt
+		if isDeclaration {
+			body = declaration.Body
+		}
+		if isLiteral {
+			body = literal.Body
+		}
+		if isDeclaration && declaration.Doc != nil {
 			fullDocumentation = declaration.Doc.Text()
 		}
 		documentation := firstParagraph(fullDocumentation)
 		source := readSource(position, endPosition)
-		classification, directEdge, externalCall := classifyDirect(declaration, loadedPackage.TypesInfo, fullDocumentation)
+		classification, directEdge, externalCall := classifyDirect(body, loadedPackage.TypesInfo, fullDocumentation)
 		result[id] = &functionMeta{
 			ssaFunction:  ssaFunction,
+			syntax:       syntax,
+			typeInfo:     loadedPackage.TypesInfo,
 			directEdge:   directEdge,
 			externalCall: externalCall,
 			function: Function{
@@ -166,7 +190,7 @@ func collectFunctions(root string, program *ssa.Program, ssaPackages []*ssa.Pack
 				Results:    tupleStrings(signature.Results(), false), Contracts: signatureContracts(signature),
 				Intent: documentation, IntentSource: intentSource(documentation),
 				File: position.Filename, Line: position.Line, EndLine: endPosition.Line,
-				Source: source, Test: isTestFunction,
+				Source: source, Test: isTestFunction, Anonymous: isLiteral,
 				Classification: classification,
 			},
 		}
@@ -174,22 +198,27 @@ func collectFunctions(root string, program *ssa.Program, ssaPackages []*ssa.Pack
 	return result
 }
 
-// collectEdges retains calls whose endpoints are both named local functions.
-func collectEdges(root string, nodes map[*ssa.Function]*callgraph.Node, metas map[string]*functionMeta) []Edge {
-	_ = root
+// collectEdges retains local calls and statically identifiable function dependencies.
+func collectEdges(nodes map[*ssa.Function]*callgraph.Node, metas map[string]*functionMeta) []Edge {
 	idByFunction := make(map[*ssa.Function]string, len(metas))
+	idByObject := make(map[*types.Func]string, len(metas))
+	idBySyntax := make(map[ast.Node]string, len(metas))
 	for id, meta := range metas {
 		idByFunction[meta.ssaFunction] = id
+		idBySyntax[meta.syntax] = id
+		if object, ok := meta.ssaFunction.Object().(*types.Func); ok {
+			idByObject[object] = id
+		}
 	}
 	edgeKeys := make(map[string]bool)
 	edges := make([]Edge, 0)
-	addEdge := func(callerID string, calleeID string, dynamic bool, callSite string) {
-		key := fmt.Sprintf("%s|%s|%t|%s", callerID, calleeID, dynamic, callSite)
+	addEdge := func(callerID string, calleeID string, kind string, dynamic bool, callSite string) {
+		key := fmt.Sprintf("%s|%s|%s|%t|%s", callerID, calleeID, kind, dynamic, callSite)
 		if edgeKeys[key] {
 			return
 		}
 		edgeKeys[key] = true
-		edges = append(edges, Edge{CallerID: callerID, CalleeID: calleeID, Dynamic: dynamic, CallSite: callSite})
+		edges = append(edges, Edge{CallerID: callerID, CalleeID: calleeID, Kind: kind, Dynamic: dynamic, CallSite: callSite})
 	}
 	for callerID, meta := range metas {
 		for _, block := range meta.ssaFunction.Blocks {
@@ -214,7 +243,7 @@ func collectEdges(root string, nodes map[*ssa.Function]*callgraph.Node, metas ma
 					continue
 				}
 				position := meta.ssaFunction.Prog.Fset.PositionFor(call.Pos(), true)
-				addEdge(callerID, calleeID, false, fmt.Sprintf("%s:%d", position.Filename, position.Line))
+				addEdge(callerID, calleeID, edgeKindCall, false, fmt.Sprintf("%s:%d", position.Filename, position.Line))
 			}
 		}
 	}
@@ -242,11 +271,18 @@ func collectEdges(root string, nodes map[*ssa.Function]*callgraph.Node, metas ma
 				position := graphEdge.Caller.Func.Prog.Fset.PositionFor(graphEdge.Site.Pos(), true)
 				callSite = fmt.Sprintf("%s:%d", position.Filename, position.Line)
 			}
-			addEdge(callerID, calleeID, dynamic, callSite)
+			addEdge(callerID, calleeID, edgeKindCall, dynamic, callSite)
 		}
 	}
+	collectDependencyEdges(metas, idByObject, idBySyntax, addEdge)
 	sort.Slice(edges, func(left, right int) bool {
 		if edges[left].CallerID == edges[right].CallerID {
+			if edges[left].CalleeID == edges[right].CalleeID {
+				if edges[left].Kind == edges[right].Kind {
+					return edges[left].CallSite < edges[right].CallSite
+				}
+				return edges[left].Kind < edges[right].Kind
+			}
 			return edges[left].CalleeID < edges[right].CalleeID
 		}
 		return edges[left].CallerID < edges[right].CallerID
@@ -254,16 +290,105 @@ func collectEdges(root string, nodes map[*ssa.Function]*callgraph.Node, metas ma
 	return edges
 }
 
+// collectDependencyEdges records local functions passed directly to calls.
+func collectDependencyEdges(
+	metas map[string]*functionMeta,
+	idByObject map[*types.Func]string,
+	idBySyntax map[ast.Node]string,
+	addEdge func(string, string, string, bool, string),
+) {
+	for callerID, meta := range metas {
+		body := functionBody(meta.syntax)
+		if body == nil || meta.typeInfo == nil {
+			continue
+		}
+		ast.Inspect(body, func(node ast.Node) bool {
+			if _, nested := node.(*ast.FuncLit); nested {
+				return false
+			}
+			call, ok := node.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			for _, argument := range call.Args {
+				if !isFunctionExpression(argument, meta.typeInfo) {
+					continue
+				}
+				calleeID := referencedFunctionID(argument, meta.typeInfo, idByObject, idBySyntax)
+				if calleeID == "" {
+					continue
+				}
+				position := meta.ssaFunction.Prog.Fset.PositionFor(argument.Pos(), true)
+				addEdge(callerID, calleeID, edgeKindDependency, false, fmt.Sprintf("%s:%d", position.Filename, position.Line))
+			}
+			return true
+		})
+	}
+}
+
+func functionBody(syntax ast.Node) *ast.BlockStmt {
+	switch typed := syntax.(type) {
+	case *ast.FuncDecl:
+		return typed.Body
+	case *ast.FuncLit:
+		return typed.Body
+	default:
+		return nil
+	}
+}
+
+func isFunctionExpression(expression ast.Expr, typeInfo *types.Info) bool {
+	valueType := typeInfo.TypeOf(expression)
+	if valueType == nil {
+		return false
+	}
+	_, ok := valueType.Underlying().(*types.Signature)
+	return ok
+}
+
+func referencedFunctionID(expression ast.Expr, typeInfo *types.Info, idByObject map[*types.Func]string, idBySyntax map[ast.Node]string) string {
+	switch typed := expression.(type) {
+	case *ast.ParenExpr:
+		return referencedFunctionID(typed.X, typeInfo, idByObject, idBySyntax)
+	case *ast.Ident:
+		function, _ := typeInfo.Uses[typed].(*types.Func)
+		return idByObject[function]
+	case *ast.SelectorExpr:
+		if selection := typeInfo.Selections[typed]; selection != nil {
+			function, _ := selection.Obj().(*types.Func)
+			return idByObject[function]
+		}
+		function, _ := typeInfo.Uses[typed.Sel].(*types.Func)
+		return idByObject[function]
+	case *ast.FuncLit:
+		return idBySyntax[typed]
+	case *ast.IndexExpr:
+		return referencedFunctionID(typed.X, typeInfo, idByObject, idBySyntax)
+	case *ast.IndexListExpr:
+		return referencedFunctionID(typed.X, typeInfo, idByObject, idBySyntax)
+	case *ast.CallExpr:
+		if typeAndValue, ok := typeInfo.Types[typed.Fun]; ok && typeAndValue.IsType() && len(typed.Args) == 1 {
+			return referencedFunctionID(typed.Args[0], typeInfo, idByObject, idBySyntax)
+		}
+	}
+	return ""
+}
+
 // stableFunctionID collapses test-augmented copies onto one source-backed symbol.
 func stableFunctionID(function *ssa.Function) string {
 	if function == nil || function.Pkg == nil {
 		return ""
 	}
-	declaration, ok := function.Syntax().(*ast.FuncDecl)
-	if !ok {
+	syntax := function.Syntax()
+	if _, declaration := syntax.(*ast.FuncDecl); !declaration {
+		if _, literal := syntax.(*ast.FuncLit); !literal {
+			return ""
+		}
+	}
+	if syntax == nil {
 		return ""
 	}
-	position := function.Prog.Fset.PositionFor(declaration.Pos(), true)
+	position := function.Prog.Fset.PositionFor(syntax.Pos(), true)
 	identity := fmt.Sprintf("%s|%s|%s:%d", function.Pkg.Pkg.Path(), functionName(function, function.Signature), position.Filename, position.Line)
 	digest := sha256.Sum256([]byte(identity))
 	return hex.EncodeToString(digest[:16])

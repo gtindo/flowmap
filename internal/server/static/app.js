@@ -416,7 +416,7 @@ function updateHistoryButtons() {
 }
 
 function edgeKey(edge) {
-  return edge.caller_id + "|" + edge.callee_id + "|" + edge.dynamic + "|" + (edge.call_site || "");
+  return edge.caller_id + "|" + edge.callee_id + "|" + (edge.kind || "call") + "|" + edge.dynamic + "|" + (edge.call_site || "");
 }
 
 function composeGraph() {
@@ -575,9 +575,10 @@ function drawEdges() {
     const y2 = to.y + currentSize.height / 2;
     const curve = Math.max(45, Math.abs(x2 - x1) / 2);
     path.setAttribute("d", "M" + x1 + " " + y1 + " C" + (x1 + curve) + " " + y1 + " " + (x2 - curve) + " " + y2 + " " + x2 + " " + y2);
-    if (edge.dynamic) path.setAttribute("class", "dynamic");
+    if (edge.kind === "dependency") path.setAttribute("class", "dependency");
+    else if (edge.dynamic) path.setAttribute("class", "dynamic");
     const title = document.createElementNS(ns, "title");
-    title.textContent = edge.dynamic ? "Dynamic dispatch candidate" : "Static call";
+    title.textContent = edge.kind === "dependency" ? "Function dependency" : edge.dynamic ? "Dynamic dispatch candidate" : "Static call";
     path.append(title);
     $("edges").append(path);
   });
@@ -585,11 +586,13 @@ function drawEdges() {
 
 function drawNode(item, position, isRoot, simple) {
   const group = document.createElementNS(ns, "g");
+  const changeKind = item.change?.kind;
+  const nameClass = "name" + (changeKind ? " " + changeKind : "");
   group.setAttribute("class", "node " + item.classification.kind + (isRoot ? " root" : "") + (simple ? " simple" : "") + (item.id === activeDetailID ? " detail-selected" : ""));
   group.setAttribute("transform", "translate(" + position.x + " " + position.y + ")");
   group.dataset.id = item.id;
   const title = document.createElementNS(ns, "title");
-  title.textContent = item.qualified_name;
+  title.textContent = item.qualified_name + (changeKind ? " (" + changeKind + " in Git diff)" : "");
   const focusRing = document.createElementNS(ns, "rect");
   focusRing.setAttribute("class", "detail-focus-ring");
   focusRing.setAttribute("x", -5);
@@ -601,9 +604,9 @@ function drawNode(item, position, isRoot, simple) {
   rect.setAttribute("height", currentSize.height);
   group.append(title, focusRing, rect);
   if (simple) {
-    addText(group, item.name, 10, 29, "name", 26);
+    addText(group, item.name, 10, 29, nameClass, 26);
   } else {
-    addText(group, item.qualified_name, 12, 23, "name", 34);
+    addText(group, item.qualified_name, 12, 23, nameClass, 34);
     addText(group, item.package, 12, 42, "pkg", 39);
     addText(group, item.signature, 12, 63, "sig", 40);
     addText(group, item.intent || "No authored intent", 12, 86, "intent", 38);

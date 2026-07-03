@@ -14,6 +14,9 @@ func (index *Index) Search(query string, includeTests bool, limit int) []SearchR
 	normalizedQuery := strings.ToLower(strings.TrimSpace(query))
 	results := make([]SearchResult, 0)
 	for _, function := range index.Functions {
+		if function.Anonymous {
+			continue
+		}
 		if function.Test && !includeTests {
 			continue
 		}

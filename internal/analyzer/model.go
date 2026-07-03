@@ -45,6 +45,7 @@ type Function struct {
 	EndLine        int             `json:"end_line"`
 	Source         string          `json:"source,omitempty"`
 	Test           bool            `json:"test"`
+	Anonymous      bool            `json:"anonymous,omitempty"`
 	Classification Classification  `json:"classification"`
 	Change         *FunctionChange `json:"change,omitempty"`
 }
@@ -73,6 +74,7 @@ type GitSnapshot struct {
 type Edge struct {
 	CallerID string `json:"caller_id"`
 	CalleeID string `json:"callee_id"`
+	Kind     string `json:"kind"`
 	Dynamic  bool   `json:"dynamic"`
 	CallSite string `json:"call_site,omitempty"`
 }

@@ -141,6 +141,9 @@ func gitNullList(ctx context.Context, directory string, arguments ...string) ([]
 func currentFunctionSpans(repositoryRoot string, functions map[string]Function) map[string][]functionSpan {
 	byFileAndLine := make(map[string]map[int]Function)
 	for _, function := range functions {
+		if function.Anonymous {
+			continue
+		}
 		path := filepath.Clean(function.File)
 		if byFileAndLine[path] == nil {
 			byFileAndLine[path] = make(map[int]Function)
