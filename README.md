@@ -88,3 +88,7 @@ Pushing a tag such as `v0.2.0` runs `.github/workflows/release.yml`, builds and 
 Flowmap is a personal software tool tailored to a specific development velocity, workflow, and aesthetic preference. Upstream feature requests, bug reports, and pull requests are not accepted.
 
 In the era of agentic coding, it is often more efficient to fork and customize software. If Flowmap matches most of your workflow but you want to change the visual layout, add features, or port it to another environment, fork the repository and use AI agents to reshape it into your own workbench.
+
+## License
+
+Flowmap is available under the [MIT License](LICENSE).

@@ -1,3 +1,4 @@
 /flowmap
 /dist/
 *.out
+.DS_Store
