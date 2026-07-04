@@ -1,10 +1,33 @@
 # Flowmap
 
-Flowmap is a local static code-reading workbench for Go. Start from one function and explore a focused caller/callee neighborhood enriched with typed inputs, outputs, named data contracts, authored intent, source, test reachability, and evidence-based functional-core/imperative-shell classification.
+![Flowmap Logo](internal/server/static/icon-192.png)
+<!-- PLACEHOLDER: Flowmap Logo Image -->
 
-Flowmap displays possible static calls and function dependencies. It does not claim that an edge executes at runtime or expose runtime values.
+Flowmap is a local, spatial code-review workbench for auditing rapid structural changes and code flux in Go repositories. When AI agents write hundreds of lines across multiple files in seconds, traditional file-tree IDEs can create cognitive overload. Flowmap replaces the file tree with an interactive, function-level call graph designed for rapid architectural supervision.
 
-For installation and complete usage instructions, see [USER_GUIDE.md](USER_GUIDE.md) or the [Flowmap documentation site](https://gtindo.github.io/flowmap/).
+For installation and usage instructions, see [USER_GUIDE.md](USER_GUIDE.md) or the [Flowmap documentation site](https://gtindo.github.io/flowmap/).
+
+![Flowmap Light](captures/light.png)
+
+![Flowmap dark](captures/dark.png)
+
+---
+
+## 🎯 What Flowmap Is (and Is Not)
+
+> **What it is**
+>
+> - **A spatial review lens:** See the shape of code changes, map execution paths, and verify structural topology without repeatedly switching file tabs.
+> - **An architectural auditor:** Inspect signatures, parameter contracts, and return types to verify that generated code respects system boundaries.
+> - **Focused and incremental:** Explore a lazy-loaded graph one hop at a time, avoiding unreadable visual "hairballs."
+
+> **What it is not**
+>
+> - **An AI chatbot or tutor:** It does not explain basic code logic or provide automated walkthroughs.
+> - **A runtime tracer:** It performs static analysis. A call edge means a function *may* call another; it does not trace live state or execution variables.
+> - **A generic multi-language tool:** It is built for the Go ecosystem and uses first-party toolchain precision.
+
+---
 
 ## Run
 
@@ -14,46 +37,38 @@ go run ./cmd/flowmap serve /path/to/go/module
 
 Open `http://127.0.0.1:7878`, search for a function, and choose upstream, downstream, or both directions. Use `--tags tag1,tag2` for build tags and `--addr 127.0.0.1:9000` to change the local address.
 
-To keep Flowmap in the macOS Dock, open the running workbench in Safari and choose **File > Add to Dock**, or use **Install Flowmap** in Chrome. The installed web app uses the same host and port and does not start the Flowmap server; see the [user guide](USER_GUIDE.md#add-flowmap-to-the-macos-dock) for details.
+To keep Flowmap in the macOS Dock, open the running workbench in Safari and choose **File > Add to Dock**, or use **Install Flowmap** in Chrome. The installed web app uses the same host and port; it does not start the Flowmap server. See the user guide for details.
 
-Tests are indexed but hidden until the **Tests** toggle is enabled. Anonymous functions appear when traversing their named parents but stay out of search and Git change lists; non-local packages remain outside the visible graph. Dashed edges are interface/dynamic-dispatch candidates, while dotted edges show local functions passed as arguments.
+Tests are indexed but hidden until the **Tests** toggle is enabled. Anonymous functions appear when traversing their named parents but stay out of search and Git change lists. Non-local packages remain outside the visible graph. Dashed edges are interface or dynamic-dispatch candidates, while dotted edges show local functions passed as arguments.
 
-## Navigate the graph
+## Navigate the Graph and Audit Flux
 
-- A new focus starts with one hop. Use the **+** control on any node to expand only that function by one additional hop. The control becomes **−** after expansion; collapsing it removes any now-unreachable expanded subtree while preserving nodes still supplied by another path.
-- Click a node to inspect it, then choose **Focus graph here** to make it the new root.
-- Choose **Extended** for contracts and intent or **Simplified** for compact function-name nodes. Nodes are draggable in both views and their layouts are saved separately in browser storage.
-- Graphs open at a readable 100% scale. Use the scrollbars, a trackpad, or Shift+wheel to move through an oversized graph. Use **+**, **−**, and **Fit** for zoom; **Hand** provides drag-to-scroll navigation with a viewport of extra room beyond every graph edge, so nodes can be moved clear of the detail panel. Disable it to resume node dragging.
-- **Reset layout** clears saved positions for the current root, direction, test setting, and view.
-- **Rescan codebase** rebuilds the analysis after source changes without restarting Flowmap. The current graph refreshes when its root still exists; otherwise Flowmap returns to function search. A failed rescan leaves the last successful graph available.
-- When the module belongs to a Git repository, the header shows the branch captured by the current scan. **Changes** lists functions that differ from `HEAD`, including staged, unstaged, and non-ignored untracked work; changed-function details can switch their source viewer to a unified diff.
+- **Focused one-hop exploration:** A new focus starts with exactly one hop. Use the `+` control on a node to expand that function by one additional hop. The control becomes `−` after expansion; collapsing it removes any now-unreachable expanded subtree while preserving nodes supplied by another path.
+- **Reviewing code flux:** When the module belongs to a Git repository, the header shows the branch captured by the current scan. Select **Changes** to review functions that differ from `HEAD`, including staged, unstaged, and non-ignored untracked changes.
+- **Visual status anchors:** In the graph canvas, node titles reflect Git delta status: blue indicates a new function, while yellow or amber indicates an updated function. Selecting an entry focuses its graph and opens its local diff.
+- **Spatial layouts:** Choose **Extended** for contracts and intent, or **Simplified** for compact function-name nodes. Nodes are draggable in both views, and layouts are saved separately in browser storage.
+- **Canvas telemetry:** Graphs open at a readable 100% scale. Use scrollbars, a trackpad, or Shift+wheel to move through an oversized graph. Use `+`, `−`, and **Fit** for zoom. **Hand** enables drag-to-scroll navigation; disable it to resume node dragging.
+- **Rescan codebase:** Rebuild the analysis after an agent or human modifies the source code, without restarting the server. The current graph refreshes with its settings intact.
 
 ## Classification
 
-Authored `Operations (Pure)` and `Side Effect (Edge)` documentation wins. Otherwise Flowmap conservatively identifies visible effects such as package-state writes, object/index mutation, goroutines, channel sends, time/random access, and known I/O packages. A function is inferred pure only when it has no visible effects, no effect-unknown external calls, and every analyzed local callee is pure. Every result includes its provenance and evidence.
+Authored **Operations (Pure)** and **Side Effect (Edge)** documentation takes precedence. Otherwise, Flowmap conservatively identifies visible effects such as package-state writes, object or index mutation, goroutines, channel sends, time or random access, and known I/O packages.
 
-## Optional intent summaries
-
-AI generation is disabled by default. Opt in with a command that reads one JSON `SummaryRequest` from stdin and writes `{"summary":"..."}` to stdout:
-
-```sh
-go run ./cmd/flowmap serve /path/to/module --summarizer-command /path/to/your-adapter
-```
-
-Generation happens only when you press **Generate fallback intent**. Results are marked generated and cached by provider identity plus exact function source under the operating-system user cache; the analyzed repository is never modified.
+A function is inferred pure only when it has no visible effects, no effect-unknown external calls, and every analyzed local callee is pure. Every result includes provenance and evidence.
 
 ## HTTP API
 
-- `GET /api/search?q=<text>&tests=<bool>`
-- `GET /api/graph?root=<id>&direction=<upstream|downstream|both>&depth=<0..8>&tests=<bool>`
-- `GET /api/functions/<id>`
-- `GET /api/git-status`
-- `POST /api/functions/<id>/summary`
-- `POST /api/rescan`
+```text
+GET  /api/search?q=<text>&tests=<bool>
+GET  /api/graph?root=<id>&direction=<upstream|downstream|both>&depth=<0..8>&tests=<bool>
+GET  /api/functions/<id>
+GET  /api/git-status
+POST /api/rescan
+```
 
-## Develop
+## Development
 
-Building Flowmap from source requires Go 1.25 or newer. Published binaries are built with Go 1.26 and support projects loaded by Go 1.24 through Go 1.26; see the user guide for the distinction between a module's `go` directive and its active toolchain.
+Building Flowmap from source requires Go 1.25 or newer. Published binaries are built with Go 1.26 and support projects loaded by Go 1.24 through Go 1.26. See the user guide for the distinction between a module's `go` directive and its active toolchain.
 
 ```sh
 go test ./...
@@ -68,10 +83,8 @@ make release VERSION=0.1.0
 
 Pushing a tag such as `v0.2.0` runs `.github/workflows/release.yml`, builds and verifies every supported archive, and publishes them through GitHub Releases. `.github/workflows/pages.yml` publishes the canonical `USER_GUIDE.md` to GitHub Pages whenever the guide changes on `main`.
 
-Maintainers can run the guarded release script from a clean, synchronized `main` branch. It builds the release locally before creating and pushing the annotated tag:
+## 🛠 Contributing and Customization
 
-```sh
-scripts/release.sh 0.2.0
-```
+Flowmap is a personal software tool tailored to a specific development velocity, workflow, and aesthetic preference. Upstream feature requests, bug reports, and pull requests are not accepted.
 
-Enable **Settings → Pages → Build and deployment → GitHub Actions** once for the repository before the first Pages deployment.
+In the era of agentic coding, it is often more efficient to fork and customize software. If Flowmap matches most of your workflow but you want to change the visual layout, add features, or port it to another environment, fork the repository and use AI agents to reshape it into your own workbench.
