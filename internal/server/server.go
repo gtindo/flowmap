@@ -48,15 +48,19 @@ func NewRescannable(index *analyzer.Index, summarizer Summarizer, cache *Summary
 	return newApp(index, summarizer, cache, config, analyzer.Analyze)
 }
 
+// newApp validates and assembles the shared server state for fixed and rescannable apps.
 func newApp(index *analyzer.Index, summarizer Summarizer, cache *SummaryCache, config analyzer.Config, analyze func(context.Context, analyzer.Config) (*analyzer.Index, error)) (*App, error) {
 	if index == nil {
 		return nil, fmt.Errorf("create server: analysis index is required")
 	}
+
 	if summarizer != nil && cache == nil {
 		return nil, fmt.Errorf("create server: summary cache is required when a summarizer is configured")
 	}
+
 	app := &App{summarizer: summarizer, cache: cache, analysis: config, analyze: analyze}
 	app.index.Store(index)
+
 	return app, nil
 }
 
@@ -69,14 +73,17 @@ func (app *App) Handler() http.Handler {
 	mux.HandleFunc("GET /api/git-status", app.handleGitStatus)
 	mux.HandleFunc("POST /api/functions/{id}/summary", app.handleSummary)
 	mux.HandleFunc("POST /api/rescan", app.handleRescan)
+
 	assets, _ := fs.Sub(staticFiles, "static")
 	fileServer := http.FileServer(http.FS(assets))
+
 	mux.Handle("/", http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		if request.URL.Path == "/manifest.webmanifest" {
 			response.Header().Set("Content-Type", "application/manifest+json")
 		}
 		fileServer.ServeHTTP(response, request)
 	}))
+
 	return mux
 }
 
@@ -89,7 +96,9 @@ func (app *App) handleGitStatus(response http.ResponseWriter, _ *http.Request) {
 func (app *App) Listen(ctx context.Context, address string) error {
 	server := &http.Server{Addr: address, Handler: app.Handler(), ReadHeaderTimeout: 5 * time.Second}
 	errorChannel := make(chan error, 1)
+
 	go func() { errorChannel <- server.ListenAndServe() }()
+
 	select {
 	case err := <-errorChannel:
 		if errors.Is(err, http.ErrServerClosed) {
@@ -99,9 +108,11 @@ func (app *App) Listen(ctx context.Context, address string) error {
 	case <-ctx.Done():
 		shutdownContext, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
+
 		if err := server.Shutdown(shutdownContext); err != nil {
 			return fmt.Errorf("shut down Flowmap: %w", err)
 		}
+
 		return nil
 	}
 }
@@ -119,6 +130,7 @@ func (app *App) handleGraph(response http.ResponseWriter, request *http.Request)
 		writeError(response, http.StatusNotFound, err)
 		return
 	}
+
 	writeJSON(response, http.StatusOK, graph)
 }
 
@@ -129,6 +141,7 @@ func (app *App) handleFunction(response http.ResponseWriter, request *http.Reque
 		writeError(response, http.StatusNotFound, fmt.Errorf("function not found"))
 		return
 	}
+
 	writeJSON(response, http.StatusOK, function)
 }
 
@@ -138,25 +151,30 @@ func (app *App) handleSummary(response http.ResponseWriter, request *http.Reques
 		writeError(response, http.StatusNotImplemented, fmt.Errorf("AI summarization is disabled; configure --summarizer-command"))
 		return
 	}
+
 	function, exists := app.index.Load().Function(request.PathValue("id"))
 	if !exists {
 		writeError(response, http.StatusNotFound, fmt.Errorf("function not found"))
 		return
 	}
+
 	summaryRequest := SummaryRequest{QualifiedName: function.QualifiedName, Signature: function.Signature, Source: function.Source, Documentation: function.Intent, Contracts: function.Contracts}
 	if summary, cached := app.cache.Get(app.summarizer.Identity(), summaryRequest); cached {
 		writeJSON(response, http.StatusOK, SummaryResult{Summary: summary, Source: "generated", Cached: true})
 		return
 	}
+
 	summary, err := app.summarizer.Summarize(request.Context(), summaryRequest)
 	if err != nil {
 		writeError(response, http.StatusBadGateway, err)
 		return
 	}
+
 	if err := app.cache.Put(app.summarizer.Identity(), summaryRequest, summary); err != nil {
 		writeError(response, http.StatusInternalServerError, err)
 		return
 	}
+
 	writeJSON(response, http.StatusOK, SummaryResult{Summary: summary, Source: "generated"})
 }
 
@@ -167,10 +185,12 @@ func (app *App) handleRescan(response http.ResponseWriter, request *http.Request
 		writeError(response, http.StatusNotImplemented, fmt.Errorf("codebase rescanning is not configured"))
 		return
 	}
+
 	if !app.rescan.TryLock() {
 		writeError(response, http.StatusConflict, fmt.Errorf("a codebase rescan is already in progress"))
 		return
 	}
+
 	defer app.rescan.Unlock()
 
 	index, err := app.analyze(request.Context(), app.analysis)
@@ -178,7 +198,9 @@ func (app *App) handleRescan(response http.ResponseWriter, request *http.Request
 		writeError(response, http.StatusInternalServerError, fmt.Errorf("rescan codebase: %w", err))
 		return
 	}
+
 	app.index.Store(index)
+
 	writeJSON(response, http.StatusOK, RescanResult{FunctionCount: len(index.Functions), LoadReport: index.LoadReport, GitStatus: index.Git})
 }
 

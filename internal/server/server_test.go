@@ -62,6 +62,14 @@ func TestHandlerServesNavigableGraphViews(t *testing.T) {
 			t.Fatalf("workbench page omitted %s", expected)
 		}
 	}
+	workspaceStart := strings.Index(page, `<section id="workspace" class="hidden">`)
+	legendStart := strings.Index(page, `<div id="legend">`)
+	navigationStart := strings.Index(page, `aria-label="Navigation"`)
+	graphOptionsStart := strings.Index(page, `aria-label="Graph options"`)
+	canvasStart := strings.Index(page, `<div id="canvas-wrap">`)
+	if workspaceStart < 0 || legendStart < workspaceStart || navigationStart < legendStart || graphOptionsStart < navigationStart || canvasStart < graphOptionsStart {
+		t.Fatal("navigation and graph options are not nested in the hidden graph context bar")
+	}
 	if strings.Contains(page, "<style>") {
 		t.Fatal("workbench page still contains inline component styles")
 	}
@@ -71,7 +79,7 @@ func TestHandlerServesNavigableGraphViews(t *testing.T) {
 	styleResponse := httptest.NewRecorder()
 	app.Handler().ServeHTTP(styleResponse, httptest.NewRequest(http.MethodGet, "/style.css", nil))
 	style := styleResponse.Body.String()
-	for _, expected := range []string{"--surface:", ":root[data-theme=\"dark\"]", ".app-header", ".control-group", ".git-review", ".changes-menu", ".change-item", ".diff-addition", ".diff-deletion", ".node .name.new { fill: var(--change-new); }", ".node .name.updated { fill: var(--change-updated); }", "#edges path.dependency", "stroke-dasharray: 2 5", "#canvas-wrap", "overflow: auto", "#detail", "width: var(--detail-width", "@media (max-width: 1480px)", "grid-template-areas: \"brand search .\" \"controls controls controls\""} {
+	for _, expected := range []string{"--surface:", "--context-bar-height: 40px", ":root[data-theme=\"dark\"]", ".app-header", ".control-group", ".context-controls", ".context-controls .control-group { min-height: 30px", "margin-left: auto", ".git-review", ".changes-menu", ".change-item", ".diff-addition", ".diff-deletion", ".node .name.new { fill: var(--change-new); }", ".node .name.updated { fill: var(--change-updated); }", "#edges path.dependency", "stroke-dasharray: 2 5", "#canvas-wrap", "overflow: auto", "#detail", "top: var(--context-bar-height)", "height: calc(100% - var(--context-bar-height))", "width: var(--detail-width", "@media (max-width: 1480px)", "grid-template-columns: auto minmax(300px, 1fr)", "grid-template-areas: \"brand search\" \"controls controls\""} {
 		if !strings.Contains(style, expected) {
 			t.Fatalf("workbench stylesheet omitted %s", expected)
 		}

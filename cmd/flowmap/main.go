@@ -36,22 +36,27 @@ func run(arguments []string) error {
 	if len(arguments) == 0 || arguments[0] != "serve" {
 		return fmt.Errorf("usage: flowmap <serve|version>; flowmap serve <module-path> [--addr %s] [--tags tag1,tag2] [--summarizer-command command]", defaultAddress)
 	}
+
 	serveFlags := flag.NewFlagSet("serve", flag.ContinueOnError)
 	address := serveFlags.String("addr", defaultAddress, "local listen address")
 	buildTags := serveFlags.String("tags", "", "comma-separated Go build tags")
 	summarizerCommand := serveFlags.String("summarizer-command", "", "opt-in JSON stdin/stdout summarizer command")
+
 	serveArguments := arguments[1:]
 	modulePath := ""
 	if len(serveArguments) > 0 && !strings.HasPrefix(serveArguments[0], "-") {
 		modulePath = serveArguments[0]
 		serveArguments = serveArguments[1:]
 	}
+
 	if err := serveFlags.Parse(serveArguments); err != nil {
 		return err
 	}
+
 	if modulePath == "" && serveFlags.NArg() == 1 {
 		modulePath = serveFlags.Arg(0)
 	}
+
 	hasUnexpectedPositionals := modulePath != "" && len(arguments) > 1 && !strings.HasPrefix(arguments[1], "-") && serveFlags.NArg() > 0
 	if modulePath == "" || serveFlags.NArg() > 1 || hasUnexpectedPositionals {
 		return fmt.Errorf("serve requires exactly one module path")
@@ -59,12 +64,15 @@ func run(arguments []string) error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
+
 	analysisConfig := analyzer.Config{Root: modulePath, BuildTags: splitTags(*buildTags)}
 	index, err := analyzer.Analyze(ctx, analysisConfig)
 	if err != nil {
 		return err
 	}
+
 	writeLoadWarning(os.Stderr, index.LoadReport)
+
 	var summarizer server.Summarizer
 	var cache *server.SummaryCache
 	if strings.TrimSpace(*summarizerCommand) != "" {
@@ -74,14 +82,17 @@ func run(arguments []string) error {
 			return err
 		}
 	}
+
 	app, err := server.NewRescannable(index, summarizer, cache, analysisConfig)
 	if err != nil {
 		return err
 	}
+
 	fmt.Printf("Flowmap indexed %d functions. Open http://%s\n", len(index.Functions), *address)
 	return app.Listen(ctx, *address)
 }
 
+// writeLoadWarning keeps partial package failures visible without stopping a usable scan.
 func writeLoadWarning(writer io.Writer, report analyzer.LoadReport) {
 	if report.HasFailures() {
 		fmt.Fprintln(writer, "flowmap: warning:", report.String())
@@ -93,12 +104,15 @@ func splitTags(value string) []string {
 	if strings.TrimSpace(value) == "" {
 		return nil
 	}
+
 	parts := strings.Split(value, ",")
 	result := make([]string, 0, len(parts))
+
 	for _, part := range parts {
 		if tag := strings.TrimSpace(part); tag != "" {
 			result = append(result, tag)
 		}
 	}
+
 	return result
 }

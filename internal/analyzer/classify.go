@@ -31,9 +31,11 @@ func classifyDirect(body *ast.BlockStmt, typeInfo *types.Info, documentation str
 	if strings.Contains(normalizedDocumentation, "operations (pure)") {
 		return Classification{Kind: classificationPure, Provenance: provenanceAuthored, Evidence: []string{"function documentation declares Operations (Pure)"}}, false, false
 	}
+
 	if strings.Contains(normalizedDocumentation, "side effect (edge)") || strings.Contains(normalizedDocumentation, "side effects (edge)") {
 		return Classification{Kind: classificationEdge, Provenance: provenanceAuthored, Evidence: []string{"function documentation declares Side Effect (Edge)"}}, true, false
 	}
+
 	// Assembly- and linker-backed declarations have effects that Go syntax cannot reveal.
 	if body == nil {
 		return Classification{Kind: classificationUnknown, Provenance: provenanceInferred}, false, true
@@ -76,6 +78,7 @@ func classifyDirect(body *ast.BlockStmt, typeInfo *types.Info, documentation str
 	if len(evidenceList) > 0 {
 		return Classification{Kind: classificationEdge, Provenance: provenanceInferred, Evidence: evidenceList}, true, externalCall
 	}
+
 	return Classification{Kind: classificationUnknown, Provenance: provenanceInferred}, false, externalCall
 }
 
@@ -100,10 +103,12 @@ func calledPackage(function ast.Expr, typeInfo *types.Info) (string, string) {
 	if !ok {
 		return "", ""
 	}
+
 	identifier, ok := selector.X.(*ast.Ident)
 	if !ok {
 		return "", ""
 	}
+
 	packageName, ok := typeInfo.Uses[identifier].(*types.PkgName)
 	if !ok {
 		return "", ""
@@ -127,6 +132,7 @@ func classifyFunctions(metas map[string]*functionMeta, edges []Edge) {
 		if edge.Kind != edgeKindCall {
 			continue
 		}
+
 		metas[edge.CallerID].localCalls = append(metas[edge.CallerID].localCalls, edge.CalleeID)
 	}
 
@@ -138,6 +144,7 @@ func classifyFunctions(metas map[string]*functionMeta, edges []Edge) {
 			if classification.Kind != classificationUnknown || meta.directEdge || meta.externalCall {
 				continue
 			}
+
 			allCalleesPure := true
 			for _, calleeID := range meta.localCalls {
 				if metas[calleeID].function.Classification.Kind != classificationPure {
@@ -148,6 +155,7 @@ func classifyFunctions(metas map[string]*functionMeta, edges []Edge) {
 			if !allCalleesPure {
 				continue
 			}
+
 			meta.function.Classification = Classification{
 				Kind: classificationPure, Provenance: provenanceInferred,
 				Evidence: []string{"no visible effects and all analyzed local callees are pure"},
@@ -160,10 +168,12 @@ func classifyFunctions(metas map[string]*functionMeta, edges []Edge) {
 		if meta.function.Classification.Kind != classificationUnknown {
 			continue
 		}
+
 		if meta.externalCall {
 			meta.function.Classification.Evidence = []string{"calls unanalyzed or effect-unknown code"}
 			continue
 		}
+
 		meta.function.Classification.Evidence = []string{"purity could not be established from the local call graph"}
 	}
 }
@@ -174,6 +184,8 @@ func sortedEvidence(evidence map[string]bool) []string {
 	for item := range evidence {
 		result = append(result, item)
 	}
+
 	sort.Strings(result)
+
 	return result
 }

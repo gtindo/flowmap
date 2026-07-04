@@ -42,6 +42,7 @@
   --diff-delete-bg: #fcebea;
   --diff-delete-text: #a33a32;
   --detail-width: min(520px, 46vw);
+  --context-bar-height: 40px;
   background: var(--app-bg);
   color: var(--text);
 }
@@ -426,7 +427,7 @@ main {
 #workspace { height: 100%; }
 
 #legend {
-  height: 35px;
+  height: var(--context-bar-height);
   padding: 0 13px;
   display: flex;
   align-items: center;
@@ -437,9 +438,27 @@ main {
   font-size: 10px;
   text-transform: uppercase;
   letter-spacing: .035em;
+  overflow-x: auto;
+  scrollbar-width: thin;
 }
 
-#legend > span { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
+.classification,
+.context-controls { display: flex; align-items: center; flex: 0 0 auto; }
+.classification { gap: 14px; }
+.classification > span { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
+.context-controls {
+  margin-left: auto;
+  padding-left: 14px;
+  gap: 7px;
+  font-size: 12px;
+  text-transform: none;
+  letter-spacing: normal;
+}
+.context-controls .control-group { min-height: 30px; padding: 1px; }
+.context-controls .icon-button { min-width: 26px; min-height: 24px; padding: 3px 5px; }
+.context-controls .select-control,
+.context-controls .toggle-control { height: 24px; }
+.context-controls .select-control select { height: 22px; }
 .legend-title { color: var(--text-faint); font-weight: 600; }
 .dot { width: 7px; height: 7px; display: inline-block; border-radius: 50%; background: var(--color); }
 .pure { --color: var(--pure); }
@@ -448,7 +467,7 @@ main {
 .dash { width: 19px; display: inline-block; border-top: 2px dashed var(--graph-edge); }
 
 #canvas-wrap {
-  height: calc(100% - 35px);
+  height: calc(100% - var(--context-bar-height));
   overflow: auto;
   background-color: var(--canvas-bg);
   background-image: radial-gradient(var(--grid-dot) .8px, transparent .8px);
@@ -487,9 +506,9 @@ main {
 #detail {
   position: absolute;
   right: 0;
-  top: 0;
+  top: var(--context-bar-height);
   width: var(--detail-width, min(520px, 46vw));
-  height: 100%;
+  height: calc(100% - var(--context-bar-height));
   overflow: hidden;
   padding: 0;
   border-left: 1px solid var(--border);
@@ -592,8 +611,8 @@ pre {
 @media (max-width: 1480px) {
   .app-header {
     display: grid;
-    grid-template-columns: auto minmax(300px, 520px) minmax(0, 1fr);
-    grid-template-areas: "brand search ." "controls controls controls";
+    grid-template-columns: auto minmax(300px, 1fr);
+    grid-template-areas: "brand search" "controls controls";
     row-gap: 7px;
     padding: 8px 12px;
   }
@@ -602,7 +621,6 @@ pre {
   .search-wrap {
     grid-area: search;
     width: 100%;
-    justify-self: start;
   }
 
   .controls {
@@ -622,7 +640,8 @@ pre {
   }
   .brand { min-width: auto; }
   .graph-options .control-label { display: none; }
-  #legend { gap: 10px; }
+  .classification { gap: 10px; }
+  .context-controls { padding-left: 10px; }
 }
 
 @media (prefers-reduced-motion: reduce) {

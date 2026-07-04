@@ -6,10 +6,17 @@ PACKAGE := ./cmd/flowmap
 DIST := dist/$(RELEASE_VERSION)
 LDFLAGS := -s -w -X main.version=$(RELEASE_VERSION)
 
-.PHONY: build test release linux-amd64 darwin-arm64 darwin-amd64 verify-release-toolchain checksums
+.PHONY: build fmt lint test release linux-amd64 darwin-arm64 darwin-amd64 verify-release-toolchain checksums
 
 build:
 	go build -trimpath -ldflags "$(LDFLAGS)" -o $(BINARY) $(PACKAGE)
+
+fmt:
+	gofmt -w $$(find cmd internal -name '*.go' -type f)
+
+lint:
+	@test -z "$$(gofmt -l cmd internal)" || (echo "run 'make fmt' to format Go files" >&2; gofmt -l cmd internal >&2; exit 1)
+	go vet ./...
 
 test:
 	go test ./...

@@ -43,17 +43,6 @@
     </div>
 
     <div class="controls" aria-label="Workbench controls">
-      <div class="control-group" aria-label="Navigation">
-        <button id="history-back" class="icon-button" title="Back to previous function" aria-label="Back to previous function" disabled>←</button>
-        <button id="history-forward" class="icon-button" title="Forward to next function" aria-label="Forward to next function" disabled>→</button>
-      </div>
-
-      <div class="control-group graph-options" aria-label="Graph options">
-        <label class="select-control"><span class="control-label">View</span><select id="view" aria-label="View mode"><option value="extended">Extended</option><option value="simple">Simplified</option></select></label>
-        <label class="select-control"><span class="control-label">Flow</span><select id="direction" aria-label="Graph direction"><option value="downstream">Downstream</option><option value="upstream">Upstream</option><option value="both">Both directions</option></select></label>
-        <label class="toggle-control"><input id="tests" type="checkbox"><span>Tests</span></label>
-      </div>
-
       <div class="control-group" aria-label="Canvas tools">
         <button id="zoom-out" class="icon-button" title="Zoom out" aria-label="Zoom out"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5 21 21M7.5 10.5h6"/></svg></button>
         <button id="zoom-in" class="icon-button" title="Zoom in" aria-label="Zoom in"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5 21 21M10.5 7.5v6M7.5 10.5h6"/></svg></button>
@@ -81,7 +70,20 @@
       <p>Search by package, receiver, or name. Flowmap reveals a focused typed neighborhood—not the whole-repository hairball.</p>
     </section>
     <section id="workspace" class="hidden">
-      <div id="legend"><span class="legend-title">Classification</span><span><i class="dot pure"></i>pure</span><span><i class="dot edge"></i>edge</span><span><i class="dot unknown"></i>unknown</span><span><i class="dash"></i>dynamic candidate</span></div>
+      <div id="legend">
+        <div class="classification"><span class="legend-title">Classification</span><span><i class="dot pure"></i>pure</span><span><i class="dot edge"></i>edge</span><span><i class="dot unknown"></i>unknown</span><span><i class="dash"></i>dynamic candidate</span></div>
+        <div class="context-controls">
+          <div class="control-group" aria-label="Navigation">
+            <button id="history-back" class="icon-button" title="Back to previous function" aria-label="Back to previous function" disabled>←</button>
+            <button id="history-forward" class="icon-button" title="Forward to next function" aria-label="Forward to next function" disabled>→</button>
+          </div>
+          <div class="control-group graph-options" aria-label="Graph options">
+            <label class="select-control"><span class="control-label">View</span><select id="view" aria-label="View mode"><option value="extended">Extended</option><option value="simple">Simplified</option></select></label>
+            <label class="select-control"><span class="control-label">Flow</span><select id="direction" aria-label="Graph direction"><option value="downstream">Downstream</option><option value="upstream">Upstream</option><option value="both">Both directions</option></select></label>
+            <label class="toggle-control"><input id="tests" type="checkbox"><span>Tests</span></label>
+          </div>
+        </div>
+      </div>
       <div id="canvas-wrap"><svg id="canvas" class="hand"><defs><marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0 0L8 4 0 8z"></path></marker></defs><g id="edges"></g><g id="nodes"></g></svg></div>
     </section>
     <aside id="detail" class="hidden">

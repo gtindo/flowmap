@@ -49,22 +49,28 @@ func (summarizer CommandSummarizer) Summarize(ctx context.Context, request Summa
 	if err != nil {
 		return "", fmt.Errorf("encode summary request: %w", err)
 	}
+
 	command := exec.CommandContext(ctx, "sh", "-c", summarizer.Command)
 	command.Stdin = bytes.NewReader(payload)
+
 	var output, errorOutput bytes.Buffer
 	command.Stdout, command.Stderr = &output, &errorOutput
 	if err := command.Run(); err != nil {
 		return "", fmt.Errorf("run summarizer: %w: %s", err, strings.TrimSpace(errorOutput.String()))
 	}
+
 	var response struct {
 		Summary string `json:"summary"`
 	}
+
 	if err := json.Unmarshal(output.Bytes(), &response); err != nil {
 		return "", fmt.Errorf("decode summarizer response: %w", err)
 	}
+
 	if response.Summary = strings.TrimSpace(response.Summary); response.Summary == "" {
 		return "", fmt.Errorf("decode summarizer response: summary is empty")
 	}
+
 	return response.Summary, nil
 }
 
@@ -77,10 +83,12 @@ func NewSummaryCache() (*SummaryCache, error) {
 	if err != nil {
 		return nil, fmt.Errorf("locate user cache: %w", err)
 	}
+
 	directory := filepath.Join(root, "flowmap", "summaries")
 	if err := os.MkdirAll(directory, 0o700); err != nil {
 		return nil, fmt.Errorf("create summary cache: %w", err)
 	}
+
 	return &SummaryCache{directory: directory}, nil
 }
 

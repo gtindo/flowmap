@@ -27,6 +27,7 @@ type Config struct {
 	BuildTags []string
 }
 
+// functionMeta retains compiler objects needed while assembling the public function model.
 type functionMeta struct {
 	ssaFunction  *ssa.Function
 	syntax       ast.Node
@@ -48,13 +49,16 @@ func Analyze(ctx context.Context, config Config) (*Index, error) {
 	if err != nil {
 		return nil, fmt.Errorf("resolve analysis root: %w", err)
 	}
+
 	if err := checkActiveToolchain(ctx, root); err != nil {
 		return nil, err
 	}
+
 	buildFlags := make([]string, 0, 1)
 	if len(config.BuildTags) > 0 {
 		buildFlags = append(buildFlags, "-tags="+strings.Join(config.BuildTags, ","))
 	}
+
 	packageConfig := &packages.Config{
 		Context:    ctx,
 		Dir:        root,
@@ -69,23 +73,28 @@ func Analyze(ctx context.Context, config Config) (*Index, error) {
 		report := LoadReport{Root: root, BuildTags: append([]string(nil), config.BuildTags...)}
 		return nil, fmt.Errorf("load Go packages: %w\nReproduce with: %s", loadErr, report.reproductionCommand())
 	}
+
 	if len(loaded) == 0 {
 		report := LoadReport{Root: root, BuildTags: append([]string(nil), config.BuildTags...)}
 		return nil, fmt.Errorf("load Go packages: no packages found beneath %s\nReproduce with: %s", root, report.reproductionCommand())
 	}
+
 	loadReport := collectLoadReport(root, config.BuildTags, loaded)
 	healthyPackages := make([]*packages.Package, 0, len(loaded))
+
 	for _, loadedPackage := range loaded {
 		if len(loadedPackage.Errors) == 0 {
 			healthyPackages = append(healthyPackages, loadedPackage)
 		}
 	}
+
 	if len(healthyPackages) == 0 {
 		return nil, fmt.Errorf("load Go packages: no analyzable packages beneath %s\n%s", root, loadReport.String())
 	}
 
 	program, ssaPackages := ssautil.AllPackages(healthyPackages, ssa.InstantiateGenerics)
 	program.Build()
+
 	packageByTypes := packagesByTypes(healthyPackages)
 	metas := collectFunctions(root, program, ssaPackages, packageByTypes)
 	if len(metas) == 0 {
@@ -98,17 +107,25 @@ func Analyze(ctx context.Context, config Config) (*Index, error) {
 	classifyFunctions(metas, edges)
 
 	index := &Index{
-		Root: root, Functions: make(map[string]Function, len(metas)), Edges: edges,
-		Outgoing: make(map[string][]Edge), Incoming: make(map[string][]Edge), LoadReport: loadReport,
+		Root:       root,
+		Functions:  make(map[string]Function, len(metas)),
+		Edges:      edges,
+		Outgoing:   make(map[string][]Edge),
+		Incoming:   make(map[string][]Edge),
+		LoadReport: loadReport,
 	}
+
 	for id, meta := range metas {
 		index.Functions[id] = meta.function
 	}
+
 	for _, edge := range edges {
 		index.Outgoing[edge.CallerID] = append(index.Outgoing[edge.CallerID], edge)
 		index.Incoming[edge.CalleeID] = append(index.Incoming[edge.CalleeID], edge)
 	}
+
 	index.Git = captureGitSnapshot(ctx, root, index.Functions)
+
 	return index, nil
 }
 
@@ -120,6 +137,7 @@ func packagesByTypes(roots []*packages.Package) map[*types.Package]*packages.Pac
 			result[pkg.Types] = pkg
 		}
 	})
+
 	return result
 }
 
@@ -326,6 +344,7 @@ func collectDependencyEdges(
 	}
 }
 
+// functionBody extracts the executable body from named and anonymous functions.
 func functionBody(syntax ast.Node) *ast.BlockStmt {
 	switch typed := syntax.(type) {
 	case *ast.FuncDecl:
@@ -337,6 +356,7 @@ func functionBody(syntax ast.Node) *ast.BlockStmt {
 	}
 }
 
+// isFunctionExpression reports whether an expression has a callable signature.
 func isFunctionExpression(expression ast.Expr, typeInfo *types.Info) bool {
 	valueType := typeInfo.TypeOf(expression)
 	if valueType == nil {
@@ -346,6 +366,7 @@ func isFunctionExpression(expression ast.Expr, typeInfo *types.Info) bool {
 	return ok
 }
 
+// referencedFunctionID resolves named and anonymous function values to stable local IDs.
 func referencedFunctionID(expression ast.Expr, typeInfo *types.Info, idByObject map[*types.Func]string, idBySyntax map[ast.Node]string) string {
 	switch typed := expression.(type) {
 	case *ast.ParenExpr:
