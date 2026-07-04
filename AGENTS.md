@@ -17,6 +17,16 @@ Favor readable vertical spacing. Separate guard clauses, setup, transformation s
 
 `cmd/flowmap/` contains the executable. `internal/analyzer/` owns Go loading, graphs, Git deltas, and classification. `internal/server/` exposes the local API; browser assets are in `internal/server/static/`. Analyzer fixtures belong in `internal/analyzer/testdata/`. Documentation lives in `README.md`, `USER_GUIDE.md`, and `docs/`; screenshots live in `captures/`.
 
+## Codebase Maps
+
+Before reading source files, start with the root [`MAP.md`](MAP.md). Then read the `MAP.md` in each package likely to be affected by the task:
+
+- [`cmd/flowmap/MAP.md`](cmd/flowmap/MAP.md) for CLI startup and process orchestration
+- [`internal/analyzer/MAP.md`](internal/analyzer/MAP.md) for loading, analysis, classification, graph queries, and Git deltas
+- [`internal/server/MAP.md`](internal/server/MAP.md) for the HTTP API, rescanning, summaries, and embedded browser workbench
+
+Treat these maps as maintained documentation, not snapshots. Every code change must update the relevant `MAP.md` files in the same change when responsibilities, data flow, package boundaries, entry points, or important files change. If no map update is needed, verify that the existing maps still describe the changed code accurately.
+
 ## Commands
 
 | Task | Command |
