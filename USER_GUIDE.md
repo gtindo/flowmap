@@ -1,21 +1,31 @@
-# Flowmap User Guide
+<div class="guide-hero">
+  <img src="internal/server/static/icon-192.png" width="88" height="88" alt="Flowmap application icon">
+  <h1>Flowmap User Guide</h1>
+  <p>Explore, navigate, and audit Go repositories through a focused, function-level call graph.</p>
+  <div class="hero-actions">
+    <a class="button button-primary" href="https://github.com/gtindo/flowmap/releases/latest">Download Flowmap</a>
+    <a class="button" href="https://github.com/gtindo/flowmap">View on GitHub</a>
+  </div>
+</div>
 
-![Flowmap Logo](internal/server/static/icon-192.png)
+Flowmap is a local, read-only spatial workbench for understanding Go repositories. Instead of presenting code only as files in a directory tree, it reveals the system as a **directed graph of functions and methods**.
 
-Flowmap is a local, read-only spatial workbench for exploring and auditing Go repositories. Instead of treating code as text files in a directory tree, Flowmap visualizes the system as a **directed topological graph of functions and methods**.
+> Flowmap performs static analysis. A call edge means a function *may* call another function; a dependency edge means a local function is passed as an argument. It maps potential relationships, not live runtime traces.
 
-Flowmap performs static analysis. A call edge means a function *may* call another function; a dependency edge means a local function is passed as an argument. It maps potential relationships, not live runtime traces.
+<div class="screenshots">
+  <figure>
+    <img src="captures/light.png" alt="Flowmap displaying a Go function graph in the light theme">
+    <figcaption>Focused function exploration in the light theme</figcaption>
+  </figure>
+  <figure>
+    <img src="captures/dark.png" alt="Flowmap displaying a Go function graph in the dark theme">
+    <figcaption>The same spatial workbench in the dark theme</figcaption>
+  </figure>
+</div>
 
 The online version of this guide is available at <https://gtindo.github.io/flowmap/>.
 
-
-![Flowmap Light](captures/light.png)
-
-![Flowmap dark](captures/dark.png)
-
----
-
-## 🧠 Core Design Philosophy
+## Core Design Philosophy
 
 Flowmap is built to address the cognitive blind spots of agentic workflows. When an AI agent adds large amounts of modular code across a project, reviewing it line by line through file tabs can be slow and disorienting.
 
@@ -30,8 +40,6 @@ Flowmap is an audit station for engineers who understand a project's domain but 
 ### Focused One-Hop Exploration
 
 Most graph visualizers generate an unreadable view of an entire repository. Flowmap starts with a single hop from a chosen function. You decide what to reveal by expanding (`+`) or collapsing (`−`) individual branches.
-
----
 
 ## Get Flowmap
 

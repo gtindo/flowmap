@@ -32,9 +32,12 @@ jobs:
       - name: Prepare canonical user guide
         run: |
           mkdir -p _pages_source
-          printf -- "---\nlayout: default\ntitle: Flowmap User Guide\n---\n\n" > _pages_source/index.md
+          printf -- "---\nlayout: default\ntitle: Flowmap User Guide\ndescription: Install Flowmap and learn how to explore, navigate, and audit Go codebases.\n---\n\n" > _pages_source/index.md
           cat USER_GUIDE.md >> _pages_source/index.md
-          cp docs/_config.yml _pages_source/_config.yml
+          cp -R docs/. _pages_source/
+          mkdir -p _pages_source/internal/server/static _pages_source/captures
+          cp internal/server/static/icon-192.png internal/server/static/icon-512.png _pages_source/internal/server/static/
+          cp captures/light.png captures/dark.png _pages_source/captures/
 
       - name: Build Pages site
         uses: actions/jekyll-build-pages@v1
