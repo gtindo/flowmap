@@ -2,11 +2,9 @@ package analyzer
 
 import (
 	"fmt"
-	"path/filepath"
-	"sort"
 	"strings"
 
-	"golang.org/x/tools/go/packages"
+	"github.com/gtindo/flowmap/internal/semantic"
 )
 
 const (
@@ -14,8 +12,8 @@ const (
 	displayedPackageLimit        = 3
 )
 
-// LoadDiagnostic is one unique Go package loading problem and the package
-// variants in which go/packages reported it.
+// LoadDiagnostic is one unique backend loading problem and the package
+// variants in which the current Go backend reported it.
 type LoadDiagnostic struct {
 	Kind     string   `json:"kind"`
 	Position string   `json:"position"`
@@ -75,99 +73,19 @@ func displayedPackages(packageNames []string) string {
 	return result
 }
 
-func collectLoadReport(root string, buildTags []string, loaded []*packages.Package) LoadReport {
-	type diagnosticKey struct {
-		kind     string
-		position string
-		message  string
-	}
-	packagesByDiagnostic := make(map[diagnosticKey]map[string]struct{})
+func loadReportFromSemantic(root string, diagnostics semantic.DiagnosticReport) LoadReport {
 	report := LoadReport{
-		Root:                 root,
-		BuildTags:            append([]string(nil), buildTags...),
-		TotalPackageVariants: len(loaded),
+		Root: root, BuildTags: append([]string(nil), diagnostics.BuildTags...),
+		TotalPackageVariants:  diagnostics.TotalUnits,
+		FailedPackageVariants: diagnostics.FailedUnits,
 	}
-
-	for _, loadedPackage := range loaded {
-		if len(loadedPackage.Errors) == 0 {
-			continue
-		}
-		report.FailedPackageVariants++
-		packageName := loadedPackage.ID
-		if packageName == "" {
-			packageName = loadedPackage.PkgPath
-		}
-		if packageName == "" {
-			packageName = "<unknown>"
-		}
-		for _, packageError := range loadedPackage.Errors {
-			key := diagnosticKey{
-				kind:     loadErrorKind(packageError.Kind),
-				position: relativeDiagnosticPosition(root, packageError.Pos),
-				message:  packageError.Msg,
-			}
-			if packagesByDiagnostic[key] == nil {
-				packagesByDiagnostic[key] = make(map[string]struct{})
-			}
-			packagesByDiagnostic[key][packageName] = struct{}{}
-		}
-	}
-
-	for key, packageSet := range packagesByDiagnostic {
-		packageNames := make([]string, 0, len(packageSet))
-		for packageName := range packageSet {
-			packageNames = append(packageNames, packageName)
-		}
-		sort.Strings(packageNames)
+	for _, diagnostic := range diagnostics.Diagnostics {
 		report.Diagnostics = append(report.Diagnostics, LoadDiagnostic{
-			Kind: key.kind, Position: key.position, Message: key.message, Packages: packageNames,
+			Kind: diagnostic.Kind, Position: diagnostic.Position, Message: diagnostic.Message,
+			Packages: append([]string(nil), diagnostic.Units...),
 		})
 	}
-	sort.Slice(report.Diagnostics, func(left, right int) bool {
-		leftDiagnostic, rightDiagnostic := report.Diagnostics[left], report.Diagnostics[right]
-		if loadErrorKindRank(leftDiagnostic.Kind) != loadErrorKindRank(rightDiagnostic.Kind) {
-			return loadErrorKindRank(leftDiagnostic.Kind) < loadErrorKindRank(rightDiagnostic.Kind)
-		}
-		if leftDiagnostic.Position != rightDiagnostic.Position {
-			return leftDiagnostic.Position < rightDiagnostic.Position
-		}
-		return leftDiagnostic.Message < rightDiagnostic.Message
-	})
 	return report
-}
-
-func loadErrorKind(kind packages.ErrorKind) string {
-	switch kind {
-	case packages.ListError:
-		return "go list"
-	case packages.ParseError:
-		return "syntax"
-	case packages.TypeError:
-		return "type"
-	default:
-		return "unknown"
-	}
-}
-
-func loadErrorKindRank(kind string) int {
-	switch kind {
-	case "go list":
-		return 0
-	case "syntax":
-		return 1
-	case "type":
-		return 2
-	default:
-		return 3
-	}
-}
-
-func relativeDiagnosticPosition(root, position string) string {
-	rootPrefix := filepath.Clean(root) + string(filepath.Separator)
-	if strings.HasPrefix(position, rootPrefix) {
-		return filepath.ToSlash(strings.TrimPrefix(position, rootPrefix))
-	}
-	return filepath.ToSlash(position)
 }
 
 func (report LoadReport) reproductionCommand() string {
