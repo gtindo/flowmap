@@ -26,6 +26,7 @@ let detailController;
 let activeDetailID;
 let activeDetailResize;
 let gitSnapshot;
+const reviewedFunctionIDs = new Set();
 const detailWidthKey = "flowmap-detail-width:v1";
 const themePreferenceKey = "flowmap-theme:v1";
 const themePreferences = new Set(["system", "light", "dark"]);
@@ -251,6 +252,7 @@ function renderGitStatus(status) {
       row.type = "button";
       row.setAttribute("role", "menuitem");
       const title = node("span", "change-name", item.qualified_name);
+      if (reviewedFunctionIDs.has(item.id)) title.append(node("span", "reviewed-list-badge", "✓ Reviewed"));
       const metadata = node("span", "change-metadata");
       metadata.append(node("span", "change-kind " + item.kind, item.kind), document.createTextNode(" " + item.package + " · " + item.file.split(/[\\/]/).pop() + ":" + item.line));
       row.append(title, metadata);
@@ -344,6 +346,7 @@ async function rescanCodebase() {
   rescanButton.textContent = "Scanning…";
   try {
     const result = await json("/api/rescan", { method: "POST" });
+    reviewedFunctionIDs.clear();
     renderGitStatus(result.git_status);
     hideDetail();
     hideResults();
@@ -587,6 +590,7 @@ function drawEdges() {
 function drawNode(item, position, isRoot, simple) {
   const group = document.createElementNS(ns, "g");
   const changeKind = item.change?.kind;
+  const reviewed = reviewedFunctionIDs.has(item.id);
   const nameClass = "name" + (changeKind ? " " + changeKind : "");
   group.setAttribute("class", "node " + item.classification.kind + (isRoot ? " root" : "") + (simple ? " simple" : "") + (item.id === activeDetailID ? " detail-selected" : ""));
   group.setAttribute("transform", "translate(" + position.x + " " + position.y + ")");
@@ -603,10 +607,11 @@ function drawNode(item, position, isRoot, simple) {
   rect.setAttribute("width", currentSize.width);
   rect.setAttribute("height", currentSize.height);
   group.append(title, focusRing, rect);
+  if (reviewed) addReviewedNodeBadge(group);
   if (simple) {
-    addText(group, item.name, 10, 29, nameClass, 26);
+    addText(group, item.name, 10, 29, nameClass, reviewed ? 8 : 26);
   } else {
-    addText(group, item.qualified_name, 12, 23, nameClass, 34);
+    addText(group, item.qualified_name, 12, 23, nameClass, reviewed ? 21 : 34);
     addText(group, item.package, 12, 42, "pkg", 39);
     addText(group, item.signature, 12, 63, "sig", 40);
     addText(group, item.intent || "No authored intent", 12, 86, "intent", 38);
@@ -615,6 +620,27 @@ function drawNode(item, position, isRoot, simple) {
   group.onclick = () => { if (!suppressClick) showDetail(item.id); };
   addExpansionControl(group, item.id);
   $("nodes").append(group);
+}
+
+function addReviewedNodeBadge(group) {
+  const badgeX = currentSize.width - 96;
+  const marker = document.createElementNS(ns, "g");
+  marker.setAttribute("class", "reviewed-node-badge");
+  marker.setAttribute("role", "img");
+  marker.setAttribute("aria-label", "Reviewed");
+  const title = document.createElementNS(ns, "title");
+  title.textContent = "Reviewed";
+  const background = document.createElementNS(ns, "rect");
+  background.setAttribute("x", badgeX);
+  background.setAttribute("y", 8);
+  background.setAttribute("width", 68);
+  background.setAttribute("height", 19);
+  const label = document.createElementNS(ns, "text");
+  label.setAttribute("x", badgeX + 6);
+  label.setAttribute("y", 21);
+  label.textContent = "✓ Reviewed";
+  marker.append(title, background, label);
+  group.append(marker);
 }
 
 function addExpansionControl(group, id) {
@@ -901,6 +927,20 @@ function renderDetail(item) {
     showDetail(item.id);
   };
   actions.append(focusButton, expandButton);
+  if (item.change) {
+    const reviewed = reviewedFunctionIDs.has(item.id);
+    const reviewButton = node("button", reviewed ? "reviewed-action" : "", reviewed ? "Mark unreviewed" : "Mark reviewed");
+    reviewButton.type = "button";
+    reviewButton.setAttribute("aria-pressed", String(reviewed));
+    reviewButton.onclick = () => {
+      if (reviewedFunctionIDs.has(item.id)) reviewedFunctionIDs.delete(item.id);
+      else reviewedFunctionIDs.add(item.id);
+      drawGraph();
+      renderGitStatus();
+      renderDetail(item);
+    };
+    actions.append(reviewButton);
+  }
   content.append(badges, node("p", "muted", item.file + ":" + item.line), actions, node("h3", "", "Intent"), node("p", "intent", item.intent || "No authored intent."));
   const button = node("button", "generate", "Generate fallback intent");
   button.onclick = async () => { button.disabled = true; try { const result = await json("/api/functions/" + encodeURIComponent(item.id) + "/summary", { method: "POST" }); button.before(node("p", "intent", result.summary)); button.remove(); } catch (error) { button.textContent = error.message; button.disabled = false; } };

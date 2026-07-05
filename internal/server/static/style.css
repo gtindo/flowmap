@@ -37,6 +37,8 @@
   --unknown: #758093;
   --change-new: #3978c6;
   --change-updated: #a76517;
+  --reviewed: #178653;
+  --reviewed-soft: #e3f5eb;
   --diff-add-bg: #e8f6ee;
   --diff-add-text: #17653f;
   --diff-delete-bg: #fcebea;
@@ -84,6 +86,8 @@
   --unknown: #9aa6b8;
   --change-new: #68a5ee;
   --change-updated: #e4a34f;
+  --reviewed: #53c98d;
+  --reviewed-soft: #183d2d;
   --diff-add-bg: #163629;
   --diff-add-text: #8ed6ad;
   --diff-delete-bg: #402322;
@@ -380,6 +384,7 @@ input:focus-visible {
 .change-item:last-child { border-bottom: 0; }
 .change-item:hover { background: var(--surface-hover); }
 .change-name { display: block; color: var(--text-strong); font: 600 12px/1.4 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+.reviewed-list-badge { margin-left: 8px; padding: 2px 5px; border-radius: 4px; background: var(--reviewed-soft); color: var(--reviewed); font: 700 9px/1.4 Inter, ui-sans-serif, sans-serif; text-transform: uppercase; white-space: nowrap; }
 .change-metadata { display: block; margin-top: 3px; color: var(--text-muted); font-size: 10px; }
 .change-kind { color: var(--color); font-weight: 700; text-transform: uppercase; }
 .change-kind.new,
@@ -495,6 +500,9 @@ main {
 .node .pkg,
 .node .intent { fill: var(--text-muted); font-size: 10px; }
 .node .sig { fill: var(--text); font: 10px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+.node .reviewed-node-badge { pointer-events: none; }
+.node .reviewed-node-badge rect { fill: var(--reviewed-soft); stroke: var(--reviewed); stroke-width: 1; rx: 4; }
+.node .reviewed-node-badge text { fill: var(--reviewed); font: 700 9px Inter, ui-sans-serif, sans-serif; }
 
 #canvas.hand { cursor: grab; }
 #canvas.hand.panning { cursor: grabbing; }
@@ -572,6 +580,7 @@ main {
 .detail-actions button,
 .generate,
 .diff-toggle { padding: 6px 9px; border: 1px solid var(--border); border-radius: 5px; background: var(--surface-subtle); color: var(--text); font-size: 11px; cursor: pointer; }
+.detail-actions button.reviewed-action { border-color: var(--reviewed); background: var(--reviewed-soft); color: var(--reviewed); }
 
 .diff-toggle:hover { background: var(--surface-hover); color: var(--text-strong); }
 
