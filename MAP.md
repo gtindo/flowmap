@@ -6,11 +6,13 @@ This file is the starting point for code exploration. It describes the repositor
 
 ## Overview
 
-Flowmap is a local code-reading workbench for Go repositories. It loads a target module with the Go toolchain, builds a typed function-level call graph, classifies functions by their relationship to side effects, overlays local Git changes, and serves the result through an embedded browser UI.
+Flowmap is a local code-reading workbench for Go repositories. Its built-in Go backend loads a target module with the Go toolchain and emits a language-neutral semantic snapshot. Flowmap then builds a function-level graph, classifies functions by their relationship to side effects, overlays local Git changes, and serves the result through an embedded browser UI.
 
 The design follows a functional-core, imperative-shell boundary:
 
-- `internal/analyzer/` owns deterministic models, classification, graph assembly, and queries, while keeping toolchain, filesystem, and Git access explicit.
+- `internal/semantic/` defines the backend contract and language-neutral semantic facts.
+- `internal/backends/go/` owns Go toolchain, package loading, compiler, and call-graph effects.
+- `internal/analyzer/` owns deterministic semantic enrichment, classification, graph assembly, Git attribution, and queries.
 - `cmd/flowmap/` owns command-line and process lifecycle effects.
 - `internal/server/` owns HTTP, subprocess summarization, cache, and browser integration effects.
 
@@ -19,7 +21,10 @@ The design follows a functional-core, imperative-shell boundary:
 ```text
 flowmap/
 ├── cmd/flowmap/             # CLI entry point and startup orchestration
-├── internal/analyzer/       # Go loading, call graph, classification, queries, and Git deltas
+├── internal/semantic/       # Language-neutral backend interface and semantic facts
+├── internal/backends/       # Built-in language backend implementations
+│   └── go/                  # Go loading, compiler analysis, and semantic extraction
+├── internal/analyzer/       # Flowmap enrichment, classification, queries, and Git deltas
 │   └── testdata/            # Fixture modules for loader and compatibility behavior
 ├── internal/server/         # Local HTTP API, embedded web app, rescans, and summaries
 │   └── static/              # Browser workbench and PWA assets
@@ -40,7 +45,15 @@ Parses `serve` and `version`, validates flags, runs the initial analysis, config
 
 ### `internal/analyzer/` — Analysis Engine
 
-Loads the target module with `go/packages`, constructs SSA and local call relationships, extracts contracts and documentation, classifies functions, captures Git changes, and exposes immutable search and graph queries. See [`internal/analyzer/MAP.md`](internal/analyzer/MAP.md).
+Transforms a complete semantic snapshot into the existing `Index`, classifies functions, captures Git changes, and exposes immutable search and graph queries. See [`internal/analyzer/MAP.md`](internal/analyzer/MAP.md).
+
+### `internal/semantic/` — Backend Contract
+
+Defines plain structs for callable symbols, stable identities, source locations, signatures, contracts, evidence, relationships, and diagnostics, plus the context-first `Backend` interface. It contains no Go compiler types. See [`internal/semantic/MAP.md`](internal/semantic/MAP.md).
+
+### `internal/backends/go/` — Go Semantic Backend
+
+Implements the sole current backend with `go/packages`, AST/type information, SSA, CHA, and VTA. It preserves Flowmap's established IDs and emits semantic facts without performing Flowmap classification. See [`internal/backends/MAP.md`](internal/backends/MAP.md) and [`internal/backends/go/MAP.md`](internal/backends/go/MAP.md).
 
 ### `internal/server/` — Local Workbench
 
@@ -51,9 +64,10 @@ Publishes the analysis through JSON endpoints, atomically replaces indexes durin
 ```text
 CLI arguments
   -> analyzer.Config
-  -> Go package loading and toolchain check
-  -> SSA functions and call relationships
-  -> classification, contracts, load report, and Git snapshot
+  -> built-in Go backend
+  -> language-neutral semantic snapshot
+  -> Flowmap classification, graph/index assembly, and load report
+  -> Git snapshot
   -> immutable analyzer.Index
   -> server.App atomic index pointer
   -> JSON API
@@ -64,7 +78,9 @@ A rescan repeats the analysis beside the active index and swaps the completed re
 
 ## Exploration Guide
 
-- For loading, graph accuracy, classifications, contracts, diagnostics, or change detection, start in `internal/analyzer/`.
+- For the backend interface or semantic vocabulary, start in `internal/semantic/`.
+- For Go loading, compiler analysis, IDs, contracts, relationships, or toolchain diagnostics, start in `internal/backends/go/`.
+- For Flowmap classification, graph/index assembly, queries, or change detection, start in `internal/analyzer/`.
 - For flags, startup failures, cancellation, or top-level wiring, start in `cmd/flowmap/`.
 - For endpoints, rescan concurrency, summary providers, caching, or UI behavior, start in `internal/server/`.
 - For toolchain compatibility behavior, also inspect `scripts/compatibility-smoke.sh` and the analyzer fixture modules.

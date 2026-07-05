@@ -1,4 +1,4 @@
-package analyzer
+package gobackend
 
 import (
 	"context"
@@ -9,8 +9,7 @@ import (
 	"strings"
 )
 
-// checkActiveToolchain ensures go/packages will not emit export data newer
-// than the Go runtime embedded in this Flowmap executable can read.
+// checkActiveToolchain protects go/packages from newer export data.
 func checkActiveToolchain(ctx context.Context, root string) error {
 	command := exec.CommandContext(ctx, "go", "env", "GOVERSION")
 	command.Dir = root
@@ -21,7 +20,7 @@ func checkActiveToolchain(ctx context.Context, root string) error {
 	return checkToolchainVersions(runtime.Version(), strings.TrimSpace(string(output)))
 }
 
-func checkToolchainVersions(applicationVersion string, activeVersion string) error {
+func checkToolchainVersions(applicationVersion, activeVersion string) error {
 	applicationLanguage := version.Lang(applicationVersion)
 	activeLanguage := version.Lang(activeVersion)
 	if applicationLanguage == "" || activeLanguage == "" {

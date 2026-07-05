@@ -1,4 +1,4 @@
-// Package analyzer builds a typed, evidence-rich map of a Go codebase.
+// Package analyzer enriches semantic backend facts into Flowmap's immutable index.
 package analyzer
 
 // Classification describes a function's relationship to side effects.

@@ -1,17 +1,18 @@
-package analyzer
+package gobackend
 
 import (
 	"fmt"
 	"go/types"
 	"sort"
+
+	"github.com/gtindo/flowmap/internal/semantic"
 )
 
-// readableType renders types with short package qualifiers for graph labels.
+// readableType preserves the established short Go package qualifiers.
 func readableType(value types.Type) string {
 	return types.TypeString(value, func(pkg *types.Package) string { return pkg.Name() })
 }
 
-// tupleStrings renders a signature tuple while preserving declared names.
 func tupleStrings(tuple *types.Tuple, variadic bool) []string {
 	values := make([]string, 0, tuple.Len())
 	for index := 0; index < tuple.Len(); index++ {
@@ -31,9 +32,8 @@ func tupleStrings(tuple *types.Tuple, variadic bool) []string {
 	return values
 }
 
-// signatureContracts extracts named structs and interfaces crossing a boundary.
-func signatureContracts(signature *types.Signature) []Contract {
-	contracts := make(map[string]Contract)
+func signatureContracts(signature *types.Signature) []semantic.Contract {
+	contracts := make(map[string]semantic.Contract)
 	for _, tuple := range []*types.Tuple{signature.Params(), signature.Results()} {
 		for index := 0; index < tuple.Len(); index++ {
 			collectContract(tuple.At(index).Type(), contracts)
@@ -45,15 +45,14 @@ func signatureContracts(signature *types.Signature) []Contract {
 		names = append(names, name)
 	}
 	sort.Strings(names)
-	result := make([]Contract, 0, len(names))
+	result := make([]semantic.Contract, 0, len(names))
 	for _, name := range names {
 		result = append(result, contracts[name])
 	}
 	return result
 }
 
-// collectContract unwraps containers and records a named struct or interface once.
-func collectContract(value types.Type, contracts map[string]Contract) {
+func collectContract(value types.Type, contracts map[string]semantic.Contract) {
 	switch typed := value.(type) {
 	case *types.Pointer:
 		collectContract(typed.Elem(), contracts)
@@ -75,19 +74,19 @@ func collectContract(value types.Type, contracts map[string]Contract) {
 		}
 		switch underlying := typed.Underlying().(type) {
 		case *types.Struct:
-			fields := make([]Field, 0, underlying.NumFields())
+			fields := make([]semantic.Field, 0, underlying.NumFields())
 			for index := 0; index < underlying.NumFields(); index++ {
 				field := underlying.Field(index)
-				fields = append(fields, Field{Name: field.Name(), Type: readableType(field.Type())})
+				fields = append(fields, semantic.Field{Name: field.Name(), Type: readableType(field.Type())})
 			}
-			contracts[name] = Contract{Name: name, Kind: "struct", Fields: fields}
+			contracts[name] = semantic.Contract{Name: name, Kind: "struct", Fields: fields}
 		case *types.Interface:
 			underlying.Complete()
 			methods := make([]string, 0, underlying.NumMethods())
 			for index := 0; index < underlying.NumMethods(); index++ {
 				methods = append(methods, underlying.Method(index).String())
 			}
-			contracts[name] = Contract{Name: name, Kind: "interface", Methods: methods}
+			contracts[name] = semantic.Contract{Name: name, Kind: "interface", Methods: methods}
 		}
 	}
 }

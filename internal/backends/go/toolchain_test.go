@@ -1,11 +1,11 @@
-package analyzer
+package gobackend
 
 import (
 	"strings"
 	"testing"
 )
 
-func TestCheckToolchainVersionsAcceptsCurrentAndOlderToolchains(t *testing.T) {
+func TestCheckToolchainVersionsAcceptsCompatibleToolchains(t *testing.T) {
 	for _, activeVersion := range []string{"go1.24.12", "go1.25.8", "go1.26", "go1.26.3"} {
 		if err := checkToolchainVersions("go1.26.3", activeVersion); err != nil {
 			t.Errorf("checkToolchainVersions(go1.26.3, %s) error = %v", activeVersion, err)

@@ -2,32 +2,23 @@ package analyzer
 
 import (
 	"fmt"
-	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
 
-	"golang.org/x/tools/go/packages"
+	"github.com/gtindo/flowmap/internal/semantic"
 )
 
-func TestCollectLoadReportDeduplicatesAndClassifiesDiagnostics(t *testing.T) {
-	root := filepath.Join(string(filepath.Separator), "work", "project")
-	typePosition := filepath.Join(root, "broken", "broken.go") + ":7:2"
-	loaded := []*packages.Package{
-		{ID: "example.com/project/b [example.com/project/b.test]", Errors: []packages.Error{
-			{Kind: packages.TypeError, Pos: typePosition, Msg: "undefined: missing"},
-			{Kind: packages.TypeError, Pos: typePosition, Msg: "undefined: missing"},
-		}},
-		{ID: "example.com/project/a", Errors: []packages.Error{
-			{Kind: packages.TypeError, Pos: typePosition, Msg: "undefined: missing"},
-			{Kind: packages.ParseError, Pos: filepath.Join(root, "a.go") + ":3:1", Msg: "expected declaration"},
-			{Kind: packages.ListError, Msg: "cannot find module providing package example.com/lost"},
-			{Kind: packages.UnknownError, Pos: "-", Msg: "driver failed"},
-		}},
-		{ID: "example.com/project/healthy"},
-	}
-
-	report := collectLoadReport(root, []string{"integration", "linux"}, loaded)
+func TestLoadReportFromSemanticPreservesDiagnostics(t *testing.T) {
+	report := loadReportFromSemantic("/work/project", semantic.DiagnosticReport{
+		BuildTags: []string{"integration", "linux"}, TotalUnits: 3, FailedUnits: 2,
+		Diagnostics: []semantic.Diagnostic{
+			{Kind: "go list", Message: "cannot find module providing package example.com/lost", Units: []string{"example.com/project/a"}},
+			{Kind: "syntax", Position: "a.go:3:1", Message: "expected declaration", Units: []string{"example.com/project/a"}},
+			{Kind: "type", Position: "broken/broken.go:7:2", Message: "undefined: missing", Units: []string{"example.com/project/a", "example.com/project/b [example.com/project/b.test]"}},
+			{Kind: "unknown", Position: "-", Message: "driver failed", Units: []string{"example.com/project/a"}},
+		},
+	})
 	if report.TotalPackageVariants != 3 || report.FailedPackageVariants != 2 {
 		t.Fatalf("package counts = %d total, %d failed", report.TotalPackageVariants, report.FailedPackageVariants)
 	}

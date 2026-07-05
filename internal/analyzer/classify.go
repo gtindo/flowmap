@@ -2,10 +2,10 @@ package analyzer
 
 import (
 	"fmt"
-	"go/ast"
-	"go/types"
 	"sort"
 	"strings"
+
+	"github.com/gtindo/flowmap/internal/semantic"
 )
 
 const (
@@ -26,7 +26,7 @@ var knownPurePackages = map[string]bool{
 }
 
 // classifyDirect records authored labels and locally visible effect evidence.
-func classifyDirect(body *ast.BlockStmt, typeInfo *types.Info, documentation string) (Classification, bool, bool) {
+func classifyDirect(documentation string, facts []semantic.Fact) (Classification, bool, bool) {
 	normalizedDocumentation := strings.ToLower(documentation)
 	if strings.Contains(normalizedDocumentation, "operations (pure)") {
 		return Classification{Kind: classificationPure, Provenance: provenanceAuthored, Evidence: []string{"function documentation declares Operations (Pure)"}}, false, false
@@ -36,43 +36,32 @@ func classifyDirect(body *ast.BlockStmt, typeInfo *types.Info, documentation str
 		return Classification{Kind: classificationEdge, Provenance: provenanceAuthored, Evidence: []string{"function documentation declares Side Effect (Edge)"}}, true, false
 	}
 
-	// Assembly- and linker-backed declarations have effects that Go syntax cannot reveal.
-	if body == nil {
-		return Classification{Kind: classificationUnknown, Provenance: provenanceInferred}, false, true
-	}
-
 	evidence := make(map[string]bool)
 	externalCall := false
-	ast.Inspect(body, func(node ast.Node) bool {
-		switch typed := node.(type) {
-		case *ast.FuncLit:
-			// A nested function owns the effects in its body.
-			return false
-		case *ast.GoStmt:
+	for _, fact := range facts {
+		switch fact.Kind {
+		case semantic.FactDeclarationWithoutBody:
+			externalCall = true
+		case semantic.FactStartsConcurrentWork:
 			evidence["starts a goroutine"] = true
-		case *ast.SendStmt:
+		case semantic.FactChannelSend:
 			evidence["sends on a channel"] = true
-		case *ast.AssignStmt:
-			for _, left := range typed.Lhs {
-				inspectAssignment(left, typeInfo, evidence)
+		case semantic.FactWritesPackageState:
+			evidence["writes package-level state"] = true
+		case semantic.FactWritesObjectState:
+			evidence["writes object field state"] = true
+		case semantic.FactWritesIndexedState:
+			evidence["writes indexed state"] = true
+		case semantic.FactExternalCall:
+			if isEdgePackage(fact.Package) {
+				evidence[fmt.Sprintf("calls %s.%s", fact.Package, fact.Name)] = true
+				continue
 			}
-		case *ast.IncDecStmt:
-			inspectAssignment(typed.X, typeInfo, evidence)
-		case *ast.CallExpr:
-			packagePath, callName := calledPackage(typed.Fun, typeInfo)
-			if packagePath == "" {
-				return true
-			}
-			if isEdgePackage(packagePath) {
-				evidence[fmt.Sprintf("calls %s.%s", packagePath, callName)] = true
-				return true
-			}
-			if !knownPurePackages[packagePath] {
+			if fact.Package == "" || !knownPurePackages[fact.Package] {
 				externalCall = true
 			}
 		}
-		return true
-	})
+	}
 
 	evidenceList := sortedEvidence(evidence)
 	if len(evidenceList) > 0 {
@@ -80,40 +69,6 @@ func classifyDirect(body *ast.BlockStmt, typeInfo *types.Info, documentation str
 	}
 
 	return Classification{Kind: classificationUnknown, Provenance: provenanceInferred}, false, externalCall
-}
-
-// inspectAssignment recognizes package-state and reference-state writes.
-func inspectAssignment(expression ast.Expr, typeInfo *types.Info, evidence map[string]bool) {
-	switch target := expression.(type) {
-	case *ast.Ident:
-		object, ok := typeInfo.Uses[target].(*types.Var)
-		if ok && object.Pkg() != nil && object.Parent() == object.Pkg().Scope() {
-			evidence["writes package-level state"] = true
-		}
-	case *ast.SelectorExpr:
-		evidence["writes object field state"] = true
-	case *ast.IndexExpr:
-		evidence["writes indexed state"] = true
-	}
-}
-
-// calledPackage resolves package-qualified function calls without guessing methods.
-func calledPackage(function ast.Expr, typeInfo *types.Info) (string, string) {
-	selector, ok := function.(*ast.SelectorExpr)
-	if !ok {
-		return "", ""
-	}
-
-	identifier, ok := selector.X.(*ast.Ident)
-	if !ok {
-		return "", ""
-	}
-
-	packageName, ok := typeInfo.Uses[identifier].(*types.PkgName)
-	if !ok {
-		return "", ""
-	}
-	return packageName.Imported().Path(), selector.Sel.Name
 }
 
 // isEdgePackage applies explicit package evidence rather than name heuristics.
