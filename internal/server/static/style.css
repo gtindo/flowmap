@@ -383,6 +383,9 @@ input:focus-visible {
 
 .change-item:last-child { border-bottom: 0; }
 .change-item:hover { background: var(--surface-hover); }
+.reset-reviewed { width: 100%; padding: 9px 11px; border: 0; border-top: 1px solid var(--border); background: var(--surface-subtle); color: var(--text-muted); text-align: left; font-size: 10px; font-weight: 650; cursor: pointer; }
+.change-item + .reset-reviewed { border-top: 0; }
+.reset-reviewed:hover { background: var(--surface-hover); color: var(--text-strong); }
 .change-name { display: block; color: var(--text-strong); font: 600 12px/1.4 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
 .reviewed-list-badge { margin-left: 8px; padding: 2px 5px; border-radius: 4px; background: var(--reviewed-soft); color: var(--reviewed); font: 700 9px/1.4 Inter, ui-sans-serif, sans-serif; text-transform: uppercase; white-space: nowrap; }
 .change-metadata { display: block; margin-top: 3px; color: var(--text-muted); font-size: 10px; }

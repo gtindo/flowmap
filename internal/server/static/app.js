@@ -27,7 +27,9 @@ let activeDetailID;
 let activeDetailResize;
 let gitSnapshot;
 const reviewedFunctionIDs = new Set();
+let reviewedRevision = "";
 const detailWidthKey = "flowmap-detail-width:v1";
+const reviewedFunctionsKey = "flowmap-reviewed-functions:v1";
 const themePreferenceKey = "flowmap-theme:v1";
 const themePreferences = new Set(["system", "light", "dark"]);
 const systemTheme = window.matchMedia("(prefers-color-scheme: dark)");
@@ -217,11 +219,50 @@ if ("serviceWorker" in navigator) {
 async function loadGitStatus() {
   try {
     gitSnapshot = await json("/api/git-status");
+    loadReviewedFunctions(gitSnapshot.revision);
     renderGitStatus();
   } catch (_) {
     gitSnapshot = undefined;
     renderGitStatus();
   }
+}
+
+function loadReviewedFunctions(revision) {
+  reviewedFunctionIDs.clear();
+  reviewedRevision = revision || "";
+  if (!reviewedRevision) {
+    try { localStorage.removeItem(reviewedFunctionsKey); } catch (_) {}
+    return;
+  }
+
+  try {
+    const stored = JSON.parse(localStorage.getItem(reviewedFunctionsKey) || "null");
+    if (stored?.revision === reviewedRevision && Array.isArray(stored.function_ids)) {
+      stored.function_ids.filter(id => typeof id === "string").forEach(id => reviewedFunctionIDs.add(id));
+      return;
+    }
+  } catch (_) {}
+
+  saveReviewedFunctions();
+}
+
+function saveReviewedFunctions() {
+  if (!reviewedRevision) return;
+  try {
+    localStorage.setItem(reviewedFunctionsKey, JSON.stringify({
+      revision: reviewedRevision,
+      function_ids: Array.from(reviewedFunctionIDs),
+    }));
+  } catch (_) {}
+}
+
+function resetReviewedFunctions() {
+  if (!window.confirm("Reset all reviewed function markers for this revision?")) return;
+  reviewedFunctionIDs.clear();
+  saveReviewedFunctions();
+  if (currentGraph) drawGraph();
+  renderGitStatus();
+  if (activeDetailID) showDetail(activeDetailID);
 }
 
 function visibleChangedFunctions() {
@@ -263,6 +304,13 @@ function renderGitStatus(status) {
       };
       menu.append(row);
     });
+  }
+  if (reviewedFunctionIDs.size > 0) {
+    const reset = node("button", "reset-reviewed", "Reset reviewed markers");
+    reset.type = "button";
+    reset.setAttribute("role", "menuitem");
+    reset.onclick = resetReviewedFunctions;
+    menu.append(reset);
   }
   review.classList.remove("hidden");
 }
@@ -346,7 +394,7 @@ async function rescanCodebase() {
   rescanButton.textContent = "Scanning…";
   try {
     const result = await json("/api/rescan", { method: "POST" });
-    reviewedFunctionIDs.clear();
+    if ((result.git_status.revision || "") !== reviewedRevision) loadReviewedFunctions(result.git_status.revision);
     renderGitStatus(result.git_status);
     hideDetail();
     hideResults();
@@ -935,6 +983,7 @@ function renderDetail(item) {
     reviewButton.onclick = () => {
       if (reviewedFunctionIDs.has(item.id)) reviewedFunctionIDs.delete(item.id);
       else reviewedFunctionIDs.add(item.id);
+      saveReviewedFunctions();
       drawGraph();
       renderGitStatus();
       renderDetail(item);
