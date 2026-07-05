@@ -13,6 +13,7 @@ This package turns a language-neutral semantic snapshot into an immutable, evide
 | `classify.go` | Authored labels, direct side-effect evidence, known-pure packages, and conservative purity propagation |
 | `query.go` | Deterministic symbol search, function lookup, and bounded upstream/downstream graph traversal |
 | `git.go` | Non-fatal Git snapshot capture and attribution of `HEAD` diffs or untracked files to current functions |
+| `git_hierarchy.go` | Pure changed-function reachability, recursive-component collapse, leaf counts, and review ordering |
 | `load_diagnostics.go` | Translation and deterministic rendering of backend diagnostics and reproduction commands |
 | `*_test.go` | Unit and regression coverage for each analysis stage |
 | `testdata/` | Small fixture modules for healthy, partially broken, fully broken, vendored, and compatibility scenarios |
@@ -48,6 +49,7 @@ Purity is inferred only when a function has no direct effect evidence, no effect
 - `dependency` edges represent statically identifiable local function values passed as dependencies.
 - `Search` excludes anonymous functions and optionally tests.
 - `Focus` returns a deterministic bounded neighborhood with depth clamped to eight.
+- Changed-function review order traverses calls and dependencies through unchanged nodes, collapses recursive components, and ranks graph levels by distinct changed leaf descendants.
 - The completed `Index` is treated as immutable and is safe for concurrent readers.
 
 ## Side-Effect Boundaries

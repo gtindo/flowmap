@@ -52,13 +52,14 @@ type Function struct {
 
 // ChangedFunction is the compact Git review representation of a function.
 type ChangedFunction struct {
-	ID            string `json:"id"`
-	QualifiedName string `json:"qualified_name"`
-	Package       string `json:"package"`
-	File          string `json:"file"`
-	Line          int    `json:"line"`
-	Test          bool   `json:"test"`
-	Kind          string `json:"kind"`
+	ID                  string `json:"id"`
+	QualifiedName       string `json:"qualified_name"`
+	Package             string `json:"package"`
+	File                string `json:"file"`
+	Line                int    `json:"line"`
+	Test                bool   `json:"test"`
+	Kind                string `json:"kind"`
+	LeafDescendantCount int    `json:"leaf_descendant_count"`
 }
 
 // GitSnapshot records repository state captured with an analysis index.

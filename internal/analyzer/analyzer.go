@@ -56,6 +56,7 @@ func analyzeWithBackend(ctx context.Context, config Config, backend semantic.Bac
 
 	index := buildIndex(snapshot)
 	index.Git = captureGitSnapshot(ctx, snapshot.Root, index.Functions)
+	index.Git = orderChangedFunctions(index.Git, index.Outgoing)
 
 	return index, nil
 }
