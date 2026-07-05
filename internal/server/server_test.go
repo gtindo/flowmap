@@ -41,7 +41,7 @@ func TestHandlerServesSearchGraphAndDetails(t *testing.T) {
 	gitResponse := httptest.NewRecorder()
 	app.Handler().ServeHTTP(gitResponse, httptest.NewRequest(http.MethodGet, "/api/git-status", nil))
 	var gitStatus analyzer.GitSnapshot
-	if err := json.Unmarshal(gitResponse.Body.Bytes(), &gitStatus); err != nil || gitStatus.Branch != "main" || len(gitStatus.ChangedFunctions) != 1 {
+	if err := json.Unmarshal(gitResponse.Body.Bytes(), &gitStatus); err != nil || gitStatus.Branch != "main" || len(gitStatus.ChangedFunctions) != 1 || gitStatus.ChangedFunctions[0].LeafDescendantCount != 2 {
 		t.Fatalf("Git status = %#v, %v", gitStatus, err)
 	}
 	detailResponse := httptest.NewRecorder()
@@ -84,10 +84,18 @@ func TestHandlerServesNavigableGraphViews(t *testing.T) {
 			t.Fatalf("workbench stylesheet omitted %s", expected)
 		}
 	}
+	if !strings.Contains(style, ".change-leaf-badge") {
+		t.Fatal("workbench stylesheet omitted changed leaf badge")
+	}
 	scriptResponse := httptest.NewRecorder()
 	app.Handler().ServeHTTP(scriptResponse, httptest.NewRequest(http.MethodGet, "/app.js", nil))
 	script := scriptResponse.Body.String()
 	for _, expected := range []string{"startDrag", "pointerMoveThreshold = 4", "Math.hypot", "localStorage.setItem", "resetLayout", "flowmap-layout:v2:", "signedLevels", "step = -1", "centerRootInViewport", "normalizeLayout", "expansionSide", "focusGraph", "focusHistory", "focusHistoryIndex", "navigateHistory", "updateHistoryButtons", "graphGeneration", "options.historyIndex", "expandNode", "collapseNode", "pruneOrphanedExpansions", "zoomGraph", "startPan", "scrollLeft", "scrollTop", "zoomScale", "viewportState", "viewportCenter", "scrollViewportTo", "marginX = wrap.clientWidth", "marginY = wrap.clientHeight", "-marginX / zoomScale", "-marginY / zoomScale", "&depth=1", "highlightGo", "sourceBlock(item.source)", "source-heading", "diffBlock", "diff-addition", "loadGitStatus", "/api/git-status", "visibleChangedFunctions", "toggleChangesMenu", "hideChangesMenu", "renderGitStatus(result.git_status)", "flowmap-reviewed-functions:v1", "loadReviewedFunctions", "saveReviewedFunctions", "resetReviewedFunctions", "window.confirm", "function_ids", "reviewedRevision", "reviewedFunctionIDs", "addReviewedNodeBadge", "Mark reviewed", "Mark unreviewed", "item.change", "const nameClass = \"name\" + (changeKind ? \" \" + changeKind : \"\")", "in Git diff", "edge.kind === \"dependency\"", "Function dependency", "Show diff", "Show source", "aria-pressed", "detailGeneration", "activeDetailID", "setActiveDetail", "detail-selected", "detail-focus-ring", "AbortController", "Loading details…", "Unable to load details", "hideDetail", "item.contracts || []", "item.classification.evidence || []", "expansionActivationWindow = 400", "expansionActivationTimes", "flowmap-detail-width:v1", "startDetailResize", "resizeDetail", "finishDetailResize", "clampDetailWidth", "detailViewportMargin = 48", "rescanCodebase", "showEmptyAfterRescan", "Scanning…", "POST"} {
+		if !strings.Contains(script, expected) {
+			t.Fatalf("workbench script omitted %s", expected)
+		}
+	}
+	for _, expected := range []string{"leaf_descendant_count", "change-leaf-badge", "changed leaf descendants"} {
 		if !strings.Contains(script, expected) {
 			t.Fatalf("workbench script omitted %s", expected)
 		}
@@ -339,7 +347,7 @@ func fixtureIndex() *analyzer.Index {
 	root := analyzer.Function{ID: "root", QualifiedName: "sample.Root", Package: "sample", File: "/work/sample.go", Line: 10, Classification: analyzer.Classification{Kind: "pure"}, Change: &analyzer.FunctionChange{Kind: "updated", Diff: "--- a/sample.go\n+++ b/sample.go\n@@ -1 +1 @@\n-old\n+new\n"}}
 	child := analyzer.Function{ID: "child", Name: "Root$1", QualifiedName: "sample.Root$1", Package: "sample", Anonymous: true, Classification: analyzer.Classification{Kind: "unknown"}}
 	edge := analyzer.Edge{CallerID: "root", CalleeID: "child", Kind: "call"}
-	gitStatus := analyzer.GitSnapshot{Available: true, Branch: "main", Revision: "1234567890", ChangedFunctions: []analyzer.ChangedFunction{{ID: "root", QualifiedName: "sample.Root", Package: "sample", File: root.File, Line: root.Line, Kind: "updated"}}}
+	gitStatus := analyzer.GitSnapshot{Available: true, Branch: "main", Revision: "1234567890", ChangedFunctions: []analyzer.ChangedFunction{{ID: "root", QualifiedName: "sample.Root", Package: "sample", File: root.File, Line: root.Line, Kind: "updated", LeafDescendantCount: 2}}}
 	return &analyzer.Index{Functions: map[string]analyzer.Function{"root": root, "child": child}, Edges: []analyzer.Edge{edge}, Outgoing: map[string][]analyzer.Edge{"root": {edge}}, Incoming: map[string][]analyzer.Edge{"child": {edge}}, Git: gitStatus}
 }
 

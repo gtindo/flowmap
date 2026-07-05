@@ -388,6 +388,7 @@ input:focus-visible {
 .reset-reviewed:hover { background: var(--surface-hover); color: var(--text-strong); }
 .change-name { display: block; color: var(--text-strong); font: 600 12px/1.4 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
 .reviewed-list-badge { margin-left: 8px; padding: 2px 5px; border-radius: 4px; background: var(--reviewed-soft); color: var(--reviewed); font: 700 9px/1.4 Inter, ui-sans-serif, sans-serif; text-transform: uppercase; white-space: nowrap; }
+.change-leaf-badge { float: right; margin-left: 8px; padding: 2px 5px; border-radius: 999px; background: var(--surface-subtle); color: var(--text-muted); font: 650 9px/1.4 Inter, ui-sans-serif, sans-serif; white-space: nowrap; }
 .change-metadata { display: block; margin-top: 3px; color: var(--text-muted); font-size: 10px; }
 .change-kind { color: var(--color); font-weight: 700; text-transform: uppercase; }
 .change-kind.new,

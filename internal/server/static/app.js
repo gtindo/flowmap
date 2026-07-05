@@ -294,6 +294,10 @@ function renderGitStatus(status) {
       row.setAttribute("role", "menuitem");
       const title = node("span", "change-name", item.qualified_name);
       if (reviewedFunctionIDs.has(item.id)) title.append(node("span", "reviewed-list-badge", "✓ Reviewed"));
+      const leafCount = Number.isInteger(item.leaf_descendant_count) ? item.leaf_descendant_count : 0;
+      const leafBadge = node("span", "change-leaf-badge", `${leafCount} ${leafCount === 1 ? "leaf" : "leaves"}`);
+      leafBadge.setAttribute("aria-label", `${leafCount} changed leaf descendants`);
+      title.append(leafBadge);
       const metadata = node("span", "change-metadata");
       metadata.append(node("span", "change-kind " + item.kind, item.kind), document.createTextNode(" " + item.package + " · " + item.file.split(/[\\/]/).pop() + ":" + item.line));
       row.append(title, metadata);
