@@ -243,7 +243,7 @@ func collectRelationships(nodes map[*ssa.Function]*callgraph.Node, metas map[str
 			continue
 		}
 		for _, graphEdge := range node.Out {
-			if graphEdge.Site == nil || !graphEdge.Site.Common().IsInvoke() {
+			if graphEdge.Site == nil || graphEdge.Site.Common().StaticCallee() != nil {
 				continue
 			}
 			calleeID, calleeExists := idByFunction[graphEdge.Callee.Func]
@@ -292,19 +292,25 @@ func collectDependencyRelationships(
 			if _, nested := node.(*ast.FuncLit); nested {
 				return false
 			}
-			call, ok := node.(*ast.CallExpr)
-			if !ok {
+			var expressions []ast.Expr
+			switch typed := node.(type) {
+			case *ast.CallExpr:
+				expressions = typed.Args
+			case *ast.ReturnStmt:
+				expressions = typed.Results
+			default:
 				return true
 			}
-			for _, argument := range call.Args {
-				if !isFunctionExpression(argument, meta.typeInfo) {
+
+			for _, expression := range expressions {
+				if !isFunctionExpression(expression, meta.typeInfo) {
 					continue
 				}
-				calleeID := referencedFunctionID(argument, meta.typeInfo, idByObject, idBySyntax)
+				calleeID := referencedFunctionID(expression, meta.typeInfo, idByObject, idBySyntax)
 				if calleeID == "" {
 					continue
 				}
-				position := meta.ssaFunction.Prog.Fset.PositionFor(argument.Pos(), true)
+				position := meta.ssaFunction.Prog.Fset.PositionFor(expression.Pos(), true)
 				add(callerID, calleeID, semantic.RelationshipDependency, formatPosition(position), "syntax", "exact", false)
 			}
 			return true

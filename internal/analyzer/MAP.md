@@ -45,8 +45,8 @@ Purity is inferred only when a function has no direct effect evidence, no effect
 ## Graph and Query Model
 
 - Stable function IDs key `Index.Functions` and adjacency maps.
-- `call` edges represent backend-reported local calls, including dynamic dispatch candidates and their precision metadata before translation to the unchanged public edge model.
-- `dependency` edges represent statically identifiable local function values passed as dependencies.
+- `call` edges represent backend-reported local calls, including dynamic interface and function-value candidates and their precision metadata before translation to the unchanged public edge model.
+- `dependency` edges represent statically identifiable local function values passed or returned as dependencies.
 - `Search` excludes anonymous functions and optionally tests.
 - `Focus` returns a deterministic bounded neighborhood with depth clamped to eight.
 - Changed-function review order traverses calls and dependencies through unchanged nodes, collapses recursive components, and ranks graph levels by distinct changed leaf descendants.

@@ -10,7 +10,7 @@
 
 Flowmap is a local, read-only spatial workbench for understanding Go repositories. Instead of presenting code only as files in a directory tree, it reveals the system as a **directed graph of functions and methods**.
 
-> Flowmap performs static analysis. A call edge means a function *may* call another function; a dependency edge means a local function is passed as an argument. It maps potential relationships, not live runtime traces.
+> Flowmap performs static analysis. A call edge means a function *may* call another function; a dependency edge means a local function is passed as an argument or returned as a value. It maps potential relationships, not live runtime traces.
 
 <div class="screenshots">
   <figure>

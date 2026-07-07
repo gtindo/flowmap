@@ -64,6 +64,64 @@ func TestBackendMarksVTADispatchCandidatesDynamic(t *testing.T) {
 	t.Fatal("VTA dispatch relationship not found")
 }
 
+func TestBackendTracksReturnedFunctionValuesAsDependencies(t *testing.T) {
+	_, filename, _, _ := runtime.Caller(0)
+	root := filepath.Clean(filepath.Join(filepath.Dir(filename), "..", "..", "analyzer", "testdata", "sample"))
+	snapshot, err := (Backend{}).Analyze(context.Background(), semantic.AnalysisRequest{Root: root})
+	if err != nil {
+		t.Fatalf("Analyze() error = %v", err)
+	}
+
+	returnNamed := findSymbol(t, snapshot.Symbols, "sample.ReturnNamedCallback")
+	handleSomething := findSymbol(t, snapshot.Symbols, "sample.HandleSomething")
+	returnCalled := findSymbol(t, snapshot.Symbols, "sample.ReturnCalledCallback")
+	buildCallback := findSymbol(t, snapshot.Symbols, "sample.BuildCallback")
+
+	assertRelationship(t, snapshot.Relationships, returnNamed.ID, handleSomething.ID, semantic.RelationshipDependency)
+	assertRelationship(t, snapshot.Relationships, returnCalled.ID, buildCallback.ID, semantic.RelationshipCall)
+	assertNoRelationship(t, snapshot.Relationships, returnCalled.ID, buildCallback.ID, semantic.RelationshipDependency)
+}
+
+func TestBackendTracksInvokedFunctionParametersAsDynamicCalls(t *testing.T) {
+	_, filename, _, _ := runtime.Caller(0)
+	root := filepath.Clean(filepath.Join(filepath.Dir(filename), "..", "..", "analyzer", "testdata", "sample"))
+	snapshot, err := (Backend{}).Analyze(context.Background(), semantic.AnalysisRequest{Root: root})
+	if err != nil {
+		t.Fatalf("Analyze() error = %v", err)
+	}
+
+	dispatch := findSymbol(t, snapshot.Symbols, "sample.ExecuteReturningCallback")
+	target := findSymbol(t, snapshot.Symbols, "sample.ReturningCallbackTarget")
+	for _, relationship := range snapshot.Relationships {
+		if relationship.FromID == dispatch.ID && relationship.ToID == target.ID && relationship.Kind == semantic.RelationshipCall {
+			if !relationship.Dynamic || relationship.Provenance != "vta" || relationship.Precision != "possible" {
+				t.Fatalf("function-parameter relationship = %#v", relationship)
+			}
+			return
+		}
+	}
+	t.Fatalf("dynamic function-parameter relationship %s -> %s not found", dispatch.ID, target.ID)
+}
+
+func assertRelationship(t *testing.T, relationships []semantic.Relationship, fromID string, toID string, kind string) {
+	t.Helper()
+	for _, relationship := range relationships {
+		if relationship.FromID == fromID && relationship.ToID == toID && relationship.Kind == kind {
+			return
+		}
+	}
+	t.Fatalf("relationship %s -> %s (%s) not found in %#v", fromID, toID, kind, relationships)
+}
+
+func assertNoRelationship(t *testing.T, relationships []semantic.Relationship, fromID string, toID string, kind string) {
+	t.Helper()
+	for _, relationship := range relationships {
+		if relationship.FromID == fromID && relationship.ToID == toID && relationship.Kind == kind {
+			t.Fatalf("unexpected relationship %s -> %s (%s) found in %#v", fromID, toID, kind, relationships)
+		}
+	}
+}
+
 func findSymbol(t *testing.T, symbols []semantic.Symbol, qualifiedName string) semantic.Symbol {
 	t.Helper()
 	for _, symbol := range symbols {

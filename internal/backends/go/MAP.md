@@ -25,7 +25,7 @@ semantic.AnalysisRequest
   -> build SSA program
   -> collect named functions, methods, and closures
   -> extract signatures, contracts, documentation, source, and semantic facts
-  -> build static SSA calls, VTA dynamic candidates, and syntax dependencies
+  -> build static SSA calls, VTA interface and function-value call candidates, and passed or returned syntax dependencies
   -> semantic.Snapshot
 ```
 

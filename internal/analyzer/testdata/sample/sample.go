@@ -96,6 +96,38 @@ func SideEffectCallback() { _, _ = os.ReadFile("callback") }
 // RegisterSideEffectCallback must not inherit effects through a dependency edge.
 func RegisterSideEffectCallback() { RegisterCallback(SideEffectCallback) }
 
+// ReturnNamedCallback returns a named function dependency.
+func ReturnNamedCallback() func() { return HandleSomething }
+
+// ReturnMethodCallback returns a method-value dependency.
+func ReturnMethodCallback(owner CallbackOwner) func() { return owner.Handle }
+
+// ReturnGenericCallback returns an instantiated generic dependency.
+func ReturnGenericCallback() func() { return GenericCallback[string] }
+
+// ReturnWrappedCallback returns a parenthesized, converted dependency.
+func ReturnWrappedCallback() func() { return (func())((HandleSomething)) }
+
+// ReturnClosureCallback returns an anonymous function dependency.
+func ReturnClosureCallback() func() { return func() {} }
+
+// BuildCallback supplies a function value through a direct call.
+func BuildCallback() func() { return HandleSomething }
+
+// ReturnCalledCallback returns the result of calling another function.
+func ReturnCalledCallback() func() { return BuildCallback() }
+
+// ExecuteReturningCallback invokes a supplied function from a return expression.
+func ExecuteReturningCallback(callback func() error) error { return callback() }
+
+// ReturningCallbackTarget is supplied to ExecuteReturningCallback.
+func ReturningCallbackTarget() error { return nil }
+
+// CallExecuteReturningCallback supplies a concrete function to an invoked parameter.
+func CallExecuteReturningCallback() error {
+	return ExecuteReturningCallback(ReturningCallbackTarget)
+}
+
 // Repeat recursively repeats a string.
 func Repeat(value string, count int) string {
 	if count <= 0 {
