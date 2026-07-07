@@ -111,7 +111,7 @@ type Relationship struct {
 const (
 	// RelationshipCall identifies a call relationship.
 	RelationshipCall = "call"
-	// RelationshipDependency identifies a function passed as a dependency.
+	// RelationshipDependency identifies a function passed or returned as a dependency.
 	RelationshipDependency = "dependency"
 )
 

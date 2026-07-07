@@ -35,6 +35,15 @@ func TestAnalyzeBuildsTypedFocusedGraph(t *testing.T) {
 	registerCallbacks := findFunction(t, index, ".RegisterCallbacks")
 	sideEffectCallback := findFunction(t, index, ".SideEffectCallback")
 	registerSideEffectCallback := findFunction(t, index, ".RegisterSideEffectCallback")
+	returnNamedCallback := findFunction(t, index, ".ReturnNamedCallback")
+	returnMethodCallback := findFunction(t, index, ".ReturnMethodCallback")
+	returnGenericCallback := findFunction(t, index, ".ReturnGenericCallback")
+	returnWrappedCallback := findFunction(t, index, ".ReturnWrappedCallback")
+	returnClosureCallback := findFunction(t, index, ".ReturnClosureCallback")
+	buildCallback := findFunction(t, index, ".BuildCallback")
+	returnCalledCallback := findFunction(t, index, ".ReturnCalledCallback")
+	executeReturningCallback := findFunction(t, index, ".ExecuteReturningCallback")
+	returningCallbackTarget := findFunction(t, index, ".ReturningCallbackTarget")
 	if run.Classification.Kind != classificationEdge || run.Classification.Provenance != provenanceAuthored {
 		t.Fatalf("Run classification = %#v", run.Classification)
 	}
@@ -65,6 +74,15 @@ func TestAnalyzeBuildsTypedFocusedGraph(t *testing.T) {
 	registerClosure := findAnonymousFunction(t, index, ".RegisterCallbacks$1")
 	assertEdge(t, index, registerCallbacks.ID, registerClosure.ID, edgeKindDependency)
 	assertEdge(t, index, registerSideEffectCallback.ID, sideEffectCallback.ID, edgeKindDependency)
+	assertEdge(t, index, returnNamedCallback.ID, handleSomething.ID, edgeKindDependency)
+	assertEdge(t, index, returnMethodCallback.ID, callbackOwnerHandle.ID, edgeKindDependency)
+	assertEdge(t, index, returnGenericCallback.ID, genericCallback.ID, edgeKindDependency)
+	assertEdge(t, index, returnWrappedCallback.ID, handleSomething.ID, edgeKindDependency)
+	returnedClosure := findAnonymousFunction(t, index, ".ReturnClosureCallback$1")
+	assertEdge(t, index, returnClosureCallback.ID, returnedClosure.ID, edgeKindDependency)
+	assertEdge(t, index, returnCalledCallback.ID, buildCallback.ID, edgeKindCall)
+	assertNoEdge(t, index, returnCalledCallback.ID, buildCallback.ID, edgeKindDependency)
+	assertDynamicEdge(t, index, executeReturningCallback.ID, returningCallbackTarget.ID, edgeKindCall)
 	if registerSideEffectCallback.Classification.Kind != classificationPure {
 		t.Fatalf("dependency affected caller classification = %#v", registerSideEffectCallback.Classification)
 	}
@@ -120,6 +138,25 @@ func assertEdge(t *testing.T, index *Index, callerID string, calleeID string, ki
 		}
 	}
 	t.Fatalf("edge %s -> %s (%s) not found in %#v", callerID, calleeID, kind, index.Edges)
+}
+
+func assertNoEdge(t *testing.T, index *Index, callerID string, calleeID string, kind string) {
+	t.Helper()
+	for _, edge := range index.Edges {
+		if edge.CallerID == callerID && edge.CalleeID == calleeID && edge.Kind == kind {
+			t.Fatalf("unexpected edge %s -> %s (%s) found in %#v", callerID, calleeID, kind, index.Edges)
+		}
+	}
+}
+
+func assertDynamicEdge(t *testing.T, index *Index, callerID string, calleeID string, kind string) {
+	t.Helper()
+	for _, edge := range index.Edges {
+		if edge.CallerID == callerID && edge.CalleeID == calleeID && edge.Kind == kind && edge.Dynamic {
+			return
+		}
+	}
+	t.Fatalf("dynamic edge %s -> %s (%s) not found in %#v", callerID, calleeID, kind, index.Edges)
 }
 
 func TestAnalyzeReportsDiagnosticsWhenEveryPackageIsBroken(t *testing.T) {
