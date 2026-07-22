@@ -2,13 +2,13 @@
 
 ## Responsibility
 
-This package exposes an analysis index as a local HTTP workbench. It owns API routing, embedded static assets, atomic rescans, graceful network lifecycle, optional command-backed summaries, and summary caching outside the analyzed repository.
+This package exposes a registry of analysis indexes as a local HTTP workbench. It owns API routing, embedded static assets, lazy per-project scans, OpenTelemetry HTTP handler wrapping, request logs, atomic rescans, graceful network lifecycle, optional command-backed summaries, and summary caching outside the analyzed repository.
 
 ## Files
 
 | File | Responsibility |
 |---|---|
-| `server.go` | `App`, constructors, routes, HTTP handlers, atomic index replacement, rescan serialization, and graceful serving |
+| `server.go` | `App`, project registry constructors, routes, OpenTelemetry HTTP wrapping, request logging, project-scoped HTTP handlers, atomic index replacement, scan serialization, and graceful serving |
 | `summarizer.go` | Summary contracts, command subprocess adapter, validation, and content-addressed user-cache storage |
 | `server_test.go` | API, static asset, rescan, concurrency, and summary behavior coverage |
 | `static/index.html` | Workbench document structure and controls |
@@ -22,6 +22,8 @@ This package exposes an analysis index as a local HTTP workbench. It owns API ro
 ## API Surface
 
 ```text
+GET  /api/projects
+POST /api/projects/{name}/scan
 GET  /api/search
 GET  /api/graph
 GET  /api/functions/{id}
@@ -31,20 +33,20 @@ POST /api/rescan
 GET  /*                              embedded static workbench
 ```
 
-Handlers read the current immutable `analyzer.Index` through an atomic pointer. JSON errors use a small `{ "error": ... }` envelope.
+Handlers resolve a project from `project=<name>` and read its immutable `analyzer.Index` through an atomic pointer. A one-project app resolves omitted names for backwards compatibility. JSON errors use a small `{ "error": ... }` envelope. The returned handler is wrapped with OpenTelemetry HTTP instrumentation and telemetry-enabled structured request logging.
 
 ## Rescan Flow
 
 ```text
-POST /api/rescan
-  -> reject if rescanning is unavailable or already active
-  -> analyzer.Analyze with the original Config
+POST /api/projects/{name}/scan or POST /api/rescan?project={name}
+  -> reject if that project scan is already active
+  -> analyzer.Analyze with that project's original Config
   -> build a complete replacement Index
   -> atomic pointer swap
   -> return function count, load report, and Git snapshot
 ```
 
-The mutex permits one rescan at a time. The atomic swap keeps searches and graph requests available against the previous complete index until its replacement is ready.
+Each project mutex permits one scan at a time. Registry projects start unscanned, and a failed scan is isolated to that project. The atomic swap keeps searches and graph requests available against the previous complete index until its replacement is ready.
 
 ## Summary Flow
 
@@ -62,5 +64,6 @@ Changes under `static/` require the existing two-space indentation and before/af
 
 - Keep HTTP and subprocess effects here; put reusable graph or classification logic in `internal/analyzer/`.
 - Add endpoints in `Handler`, keep response models explicit, and extend `server_test.go`.
+- Preserve the OpenTelemetry wrapper and request log middleware around the mux when changing routing.
 - Preserve immutable-index reads and complete-before-swap behavior when changing rescans.
 - When routes, browser assets, rescan behavior, summary contracts, or file responsibilities change, update this map and the root `MAP.md` if the system-level flow changed.

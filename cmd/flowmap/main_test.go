@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -13,6 +15,25 @@ func TestSplitTags(t *testing.T) {
 	actual := splitTags(" linux, integration ,,")
 	if len(actual) != 2 || actual[0] != "linux" || actual[1] != "integration" {
 		t.Fatalf("splitTags() = %#v", actual)
+	}
+}
+
+func TestLoadProjectsValidatesRegistry(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "projects.json")
+	if err := os.WriteFile(path, []byte(`{"projects":[{"name":"API","path":"./api","tags":["integration"]},{"name":"Web","path":"./web"}]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	projects, err := loadProjects(path)
+	if err != nil || len(projects) != 2 || projects[0].Name != "API" || projects[0].Analysis.BuildTags[0] != "integration" || !filepath.IsAbs(projects[1].Analysis.Root) {
+		t.Fatalf("loadProjects() = %#v, %v", projects, err)
+	}
+
+	if err := os.WriteFile(path, []byte(`{"projects":[{"name":"API","path":"./api"},{"name":"API","path":"./web"}]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loadProjects(path); err == nil || !strings.Contains(err.Error(), "duplicate name") {
+		t.Fatalf("duplicate project error = %v", err)
 	}
 }
 

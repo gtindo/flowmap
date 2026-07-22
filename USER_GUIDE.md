@@ -101,6 +101,25 @@ Useful options:
 ./flowmap serve /path/to/project --tags integration,linux
 ```
 
+### Serve Multiple Projects
+
+Create a read-only JSON registry and pass it with `--config`:
+
+```json
+{
+  "projects": [
+    { "name": "API", "path": "/work/api", "tags": ["integration"] },
+    { "name": "Web", "path": "/work/web" }
+  ]
+}
+```
+
+```sh
+./flowmap serve --config /path/to/projects.json
+```
+
+The project picker lists configured projects. Each module is scanned when you first select it; a scan failure leaves other projects available and can be retried with **Rescan codebase**. Edit the file and restart Flowmap to change the project list.
+
 The server binds to localhost by default and is not exposed to other machines. Stop it with `Ctrl-C`.
 
 ## Add Flowmap to the macOS Dock
@@ -131,7 +150,7 @@ Flowmap follows the operating system's light or dark appearance by default. Use 
 
 ## Rescan After Editing Code
 
-Select **Rescan codebase** in the header after changing the target module. Flowmap rebuilds its analysis without stopping the server.
+Select **Rescan codebase** in the header after changing the selected module. Flowmap rebuilds that project's analysis without stopping the server.
 
 When the current root still exists, the graph refreshes with the same direction, test, and view settings. Transient node expansions and open details are cleared. If the root was removed, Flowmap returns to search.
 
