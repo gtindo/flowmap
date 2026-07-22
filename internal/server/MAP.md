@@ -2,7 +2,7 @@
 
 ## Responsibility
 
-This package exposes a registry of analysis indexes as a local HTTP workbench. It owns API routing, embedded static assets, lazy per-project scans, OpenTelemetry HTTP handler wrapping, request logs, atomic rescans, graceful network lifecycle, optional command-backed summaries, and summary caching outside the analyzed repository.
+This package exposes a registry of per-project, per-language analysis indexes as a local HTTP workbench. It owns API routing, embedded static assets, lazy language scans, OpenTelemetry HTTP handler wrapping, request logs, atomic rescans, graceful network lifecycle, optional command-backed summaries, and summary caching outside the analyzed repository.
 
 ## Files
 
@@ -24,6 +24,7 @@ This package exposes a registry of analysis indexes as a local HTTP workbench. I
 ```text
 GET  /api/projects
 POST /api/projects/{name}/scan
+POST /api/projects/{name}/languages/{language}/scan
 GET  /api/search
 GET  /api/graph
 GET  /api/functions/{id}
@@ -33,7 +34,7 @@ POST /api/rescan
 GET  /*                              embedded static workbench
 ```
 
-Handlers resolve a project from `project=<name>` and read its immutable `analyzer.Index` through an atomic pointer. A one-project app resolves omitted names for backwards compatibility. JSON errors use a small `{ "error": ... }` envelope. The returned handler is wrapped with OpenTelemetry HTTP instrumentation and telemetry-enabled structured request logging.
+Handlers resolve a project and language from `project=<name>&language=<language>` and read that immutable `analyzer.Index` through an atomic pointer. A single-language project resolves omitted names for backwards compatibility. JSON errors use a small `{ "error": ... }` envelope. The returned handler is wrapped with OpenTelemetry HTTP instrumentation and telemetry-enabled structured request logging.
 
 ## Rescan Flow
 

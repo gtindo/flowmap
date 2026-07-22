@@ -3,6 +3,7 @@ module github.com/gtindo/flowmap
 go 1.25.0
 
 require (
+	github.com/kdy1/go-typescript-eslint v0.0.0-20251023225804-e122a8dd8931
 	go.opentelemetry.io/contrib/bridges/otelslog v0.19.0
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.69.0
 	go.opentelemetry.io/otel v1.44.0
@@ -14,6 +15,7 @@ require (
 	go.opentelemetry.io/otel/sdk/log v0.20.0
 	go.opentelemetry.io/otel/sdk/metric v1.44.0
 	golang.org/x/tools v0.44.1-0.20260513175300-635ae9663724
+	google.golang.org/grpc v1.81.1
 )
 
 require (
@@ -36,6 +38,5 @@ require (
 	golang.org/x/text v0.37.0 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20260526163538-3dc84a4a5aaa // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260526163538-3dc84a4a5aaa // indirect
-	google.golang.org/grpc v1.81.1 // indirect
 	google.golang.org/protobuf v1.36.11 // indirect
 )

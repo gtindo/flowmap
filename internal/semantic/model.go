@@ -11,12 +11,14 @@ type Backend interface {
 // AnalysisRequest describes one repository analysis.
 type AnalysisRequest struct {
 	Root      string
+	Language  string
 	BuildTags []string
 }
 
 // Snapshot is a complete set of backend facts for one repository state.
 type Snapshot struct {
 	Root          string
+	Language      string
 	Symbols       []Symbol
 	Relationships []Relationship
 	Diagnostics   DiagnosticReport
@@ -25,6 +27,8 @@ type Snapshot struct {
 // Symbol describes one callable repository symbol.
 type Symbol struct {
 	ID            string
+	ChangeKey     string
+	Language      string
 	Kind          string
 	Name          string
 	QualifiedName string

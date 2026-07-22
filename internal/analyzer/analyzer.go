@@ -6,14 +6,23 @@ import (
 	"strings"
 
 	gobackend "github.com/gtindo/flowmap/internal/backends/go"
+	javascriptbackend "github.com/gtindo/flowmap/internal/backends/javascript"
 	"github.com/gtindo/flowmap/internal/semantic"
 )
 
 // Config controls one repository analysis without mutating the target tree.
 type Config struct {
 	Root      string
+	Language  string
 	BuildTags []string
 }
+
+const (
+	// LanguageGo selects the Go toolchain backend.
+	LanguageGo = "go"
+	// LanguageJavaScript selects the JavaScript, TypeScript, JSX, and TSX backend.
+	LanguageJavaScript = "javascript"
+)
 
 type functionMeta struct {
 	function     Function
@@ -27,10 +36,16 @@ const (
 	edgeKindDependency = "dependency"
 )
 
-// Analyze loads a Go working tree through the built-in backend and enriches its
-// language-neutral semantic snapshot into Flowmap's immutable index.
+// Analyze loads one supported language working tree through its built-in backend.
 func Analyze(ctx context.Context, config Config) (*Index, error) {
-	return analyzeWithBackend(ctx, config, gobackend.Backend{})
+	switch normalizeLanguage(config.Language) {
+	case LanguageGo:
+		return analyzeWithBackend(ctx, config, gobackend.Backend{})
+	case LanguageJavaScript:
+		return analyzeWithBackend(ctx, config, javascriptbackend.Backend{})
+	default:
+		return nil, fmt.Errorf("analyze repository: unsupported language %q", config.Language)
+	}
 }
 
 // AnalyzeWithBackend enriches one backend snapshot into Flowmap's immutable index.
@@ -48,7 +63,7 @@ func AnalyzeWithBackend(ctx context.Context, config Config, backend semantic.Bac
 }
 
 func analyzeWithBackend(ctx context.Context, config Config, backend semantic.Backend) (*Index, error) {
-	request := semantic.AnalysisRequest{Root: config.Root, BuildTags: append([]string(nil), config.BuildTags...)}
+	request := semantic.AnalysisRequest{Root: config.Root, Language: normalizeLanguage(config.Language), BuildTags: append([]string(nil), config.BuildTags...)}
 	snapshot, err := backend.Analyze(ctx, request)
 	if err != nil {
 		return nil, err
@@ -71,7 +86,7 @@ func buildIndex(snapshot semantic.Snapshot) *Index {
 			directEdge: directEdge, externalCall: externalCall,
 			function: Function{
 				ID: symbol.ID, Name: symbol.Name, QualifiedName: symbol.QualifiedName,
-				Package: symbol.Package, Signature: symbol.Signature.Display,
+				Package: symbol.Package, Language: symbol.Language, Signature: symbol.Signature.Display,
 				Parameters: append([]string(nil), symbol.Signature.Parameters...),
 				Results:    append([]string(nil), symbol.Signature.Results...),
 				Contracts:  contractsFromSemantic(symbol.Signature.Contracts),
@@ -86,9 +101,9 @@ func buildIndex(snapshot semantic.Snapshot) *Index {
 	edges := edgesFromSemantic(snapshot.Relationships)
 	classifyFunctions(metas, edges)
 	index := &Index{
-		Root: snapshot.Root, Functions: make(map[string]Function, len(metas)), Edges: edges,
+		Root: snapshot.Root, Language: snapshot.Language, Functions: make(map[string]Function, len(metas)), Edges: edges,
 		Outgoing: make(map[string][]Edge), Incoming: make(map[string][]Edge),
-		LoadReport: loadReportFromSemantic(snapshot.Root, snapshot.Diagnostics),
+		LoadReport: loadReport(snapshot),
 	}
 	for id, meta := range metas {
 		index.Functions[id] = meta.function
@@ -98,6 +113,20 @@ func buildIndex(snapshot semantic.Snapshot) *Index {
 		index.Incoming[edge.CalleeID] = append(index.Incoming[edge.CalleeID], edge)
 	}
 	return index
+}
+
+func loadReport(snapshot semantic.Snapshot) LoadReport {
+	if snapshot.Language == LanguageJavaScript {
+		return loadReportFromJavaScript(snapshot.Root, snapshot.Diagnostics)
+	}
+	return loadReportFromSemantic(snapshot.Root, snapshot.Diagnostics)
+}
+
+func normalizeLanguage(language string) string {
+	if strings.TrimSpace(language) == "" {
+		return LanguageGo
+	}
+	return strings.ToLower(strings.TrimSpace(language))
 }
 
 func contractsFromSemantic(contracts []semantic.Contract) []Contract {

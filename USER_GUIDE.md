@@ -1,14 +1,14 @@
 <div class="guide-hero">
   <img src="internal/server/static/icon-192.png" width="88" height="88" alt="Flowmap application icon">
   <h1>Flowmap User Guide</h1>
-  <p>Explore, navigate, and audit Go repositories through a focused, function-level call graph.</p>
+  <p>Explore, navigate, and audit Go and JavaScript/TypeScript repositories through a focused, function-level call graph.</p>
   <div class="hero-actions">
     <a class="button button-primary" href="https://github.com/gtindo/flowmap/releases/latest">Download Flowmap</a>
     <a class="button" href="https://github.com/gtindo/flowmap">View on GitHub</a>
   </div>
 </div>
 
-Flowmap is a local, read-only spatial workbench for understanding Go repositories. Instead of presenting code only as files in a directory tree, it reveals the system as a **directed graph of functions and methods**.
+Flowmap is a local, read-only spatial workbench for understanding Go and JavaScript/TypeScript repositories. Instead of presenting code only as files in a directory tree, it reveals the system as a **directed graph of functions and methods**. JavaScript support is built in: it covers JS, TS, JSX, and TSX files without Node.js, and follows direct calls through relative local imports.
 
 > Flowmap performs static analysis. A call edge means a function *may* call another function; a dependency edge means a local function is passed as an argument or returned as a value. It maps potential relationships, not live runtime traces.
 
@@ -108,8 +108,8 @@ Create a read-only JSON registry and pass it with `--config`:
 ```json
 {
   "projects": [
-    { "name": "API", "path": "/work/api", "tags": ["integration"] },
-    { "name": "Web", "path": "/work/web" }
+    { "name": "API", "path": "/work/api", "tags": ["integration"], "languages": ["go"] },
+    { "name": "Web", "path": "/work/web", "languages": ["javascript"] }
   ]
 }
 ```

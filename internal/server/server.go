@@ -10,6 +10,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -27,22 +28,38 @@ var staticFiles embed.FS
 
 const legacyProjectName = "default"
 
-// ProjectConfig identifies an independently analyzed Go module.
+// ProjectConfig identifies one independently analyzed repository.
 type ProjectConfig struct {
 	Name     string
-	Analysis analyzer.Config
+	Analysis analyzer.Config // Deprecated single-language shorthand.
+	Analyses []analyzer.Config
 }
 
 // ProjectStatus describes a configured project's current scan state.
 type ProjectStatus struct {
-	Name          string `json:"name"`
+	Name          string           `json:"name"`
+	Status        string           `json:"status"`
+	FunctionCount int              `json:"function_count,omitempty"`
+	Error         string           `json:"error,omitempty"`
+	Languages     []LanguageStatus `json:"languages,omitempty"`
+}
+
+// LanguageStatus describes one language view within a configured project.
+type LanguageStatus struct {
+	Language      string `json:"language"`
 	Status        string `json:"status"`
 	FunctionCount int    `json:"function_count,omitempty"`
 	Error         string `json:"error,omitempty"`
 }
 
 type project struct {
-	config ProjectConfig
+	name      string
+	languages map[string]*languageProject
+	list      []string
+}
+
+type languageProject struct {
+	config analyzer.Config
 	index  atomic.Pointer[analyzer.Index]
 
 	mu     sync.Mutex
@@ -73,7 +90,8 @@ func New(index *analyzer.Index, summarizer Summarizer, cache *SummaryCache) (*Ap
 		return nil, fmt.Errorf("create server: analysis index is required")
 	}
 
-	return newRegistry([]ProjectConfig{{Name: legacyProjectName}}, map[string]*analyzer.Index{legacyProjectName: index}, summarizer, cache, nil)
+	config := analyzer.Config{Root: index.Root, Language: index.Language}
+	return newRegistry([]ProjectConfig{{Name: legacyProjectName, Analysis: config}}, map[string]*analyzer.Index{legacyProjectName + "\x00" + configLanguage(config): index}, summarizer, cache, nil)
 }
 
 // NewRescannable creates a single-project workbench that can rebuild its index.
@@ -82,7 +100,16 @@ func NewRescannable(index *analyzer.Index, summarizer Summarizer, cache *Summary
 		return nil, fmt.Errorf("create server: analysis index is required")
 	}
 
-	return newRegistry([]ProjectConfig{{Name: legacyProjectName, Analysis: config}}, map[string]*analyzer.Index{legacyProjectName: index}, summarizer, cache, analyzer.Analyze)
+	return newRegistry([]ProjectConfig{{Name: legacyProjectName, Analysis: config}}, map[string]*analyzer.Index{legacyProjectName + "\x00" + configLanguage(config): index}, summarizer, cache, analyzer.Analyze)
+}
+
+// NewRescannableLanguages creates a single-repository workbench with one ready index per language.
+func NewRescannableLanguages(indexes map[string]*analyzer.Index, summarizer Summarizer, cache *SummaryCache, configs []analyzer.Config) (*App, error) {
+	initial := make(map[string]*analyzer.Index, len(indexes))
+	for language, index := range indexes {
+		initial[legacyProjectName+"\x00"+language] = index
+	}
+	return newRegistry([]ProjectConfig{{Name: legacyProjectName, Analyses: configs}}, initial, summarizer, cache, analyzer.Analyze)
 }
 
 // NewProjects creates a lazy multi-project workbench. Projects are analyzed on scan.
@@ -92,7 +119,7 @@ func NewProjects(configs []ProjectConfig, summarizer Summarizer, cache *SummaryC
 
 // newApp remains the single-project test seam used by rescan coverage.
 func newApp(index *analyzer.Index, summarizer Summarizer, cache *SummaryCache, config analyzer.Config, analyze func(context.Context, analyzer.Config) (*analyzer.Index, error)) (*App, error) {
-	return newRegistry([]ProjectConfig{{Name: legacyProjectName, Analysis: config}}, map[string]*analyzer.Index{legacyProjectName: index}, summarizer, cache, analyze)
+	return newRegistry([]ProjectConfig{{Name: legacyProjectName, Analysis: config}}, map[string]*analyzer.Index{legacyProjectName + "\x00" + configLanguage(config): index}, summarizer, cache, analyze)
 }
 
 func newRegistry(configs []ProjectConfig, indexes map[string]*analyzer.Index, summarizer Summarizer, cache *SummaryCache, analyze func(context.Context, analyzer.Config) (*analyzer.Index, error)) (*App, error) {
@@ -109,11 +136,25 @@ func newRegistry(configs []ProjectConfig, indexes map[string]*analyzer.Index, su
 		if name == "" || app.projects[name] != nil {
 			return nil, fmt.Errorf("create server: project names must be unique and non-empty")
 		}
-		entry := &project{config: config, status: "unscanned"}
-		if index := indexes[name]; index != nil {
-			entry.index.Store(index)
-			entry.status = "ready"
+		analyses := config.Analyses
+		if len(analyses) == 0 {
+			analyses = []analyzer.Config{config.Analysis}
 		}
+		entry := &project{name: name, languages: make(map[string]*languageProject, len(analyses))}
+		for _, analysis := range analyses {
+			language := configLanguage(analysis)
+			if entry.languages[language] != nil {
+				return nil, fmt.Errorf("create server: project %q contains duplicate language %q", name, language)
+			}
+			languageEntry := &languageProject{config: analysis, status: "unscanned"}
+			if index := indexes[name+"\x00"+language]; index != nil {
+				languageEntry.index.Store(index)
+				languageEntry.status = "ready"
+			}
+			entry.languages[language] = languageEntry
+			entry.list = append(entry.list, language)
+		}
+		sort.Strings(entry.list)
 		app.projects[name] = entry
 		app.projectList = append(app.projectList, name)
 	}
@@ -125,6 +166,7 @@ func (app *App) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/projects", app.handleProjects)
 	mux.HandleFunc("POST /api/projects/{name}/scan", app.handleProjectScan)
+	mux.HandleFunc("POST /api/projects/{name}/languages/{language}/scan", app.handleLanguageScan)
 	mux.HandleFunc("GET /api/search", app.handleSearch)
 	mux.HandleFunc("GET /api/graph", app.handleGraph)
 	mux.HandleFunc("GET /api/functions/{id}", app.handleFunction)
@@ -197,19 +239,22 @@ func (app *App) handleProjects(response http.ResponseWriter, _ *http.Request) {
 }
 
 func (app *App) handleProjectScan(response http.ResponseWriter, request *http.Request) {
-	app.scan(response, request, request.PathValue("name"))
+	app.scan(response, request, request.PathValue("name"), request.URL.Query().Get("language"))
+}
+func (app *App) handleLanguageScan(response http.ResponseWriter, request *http.Request) {
+	app.scan(response, request, request.PathValue("name"), request.PathValue("language"))
 }
 func (app *App) handleRescan(response http.ResponseWriter, request *http.Request) {
-	app.scan(response, request, request.URL.Query().Get("project"))
+	app.scan(response, request, request.URL.Query().Get("project"), request.URL.Query().Get("language"))
 }
 
-func (app *App) scan(response http.ResponseWriter, request *http.Request, name string) {
+func (app *App) scan(response http.ResponseWriter, request *http.Request, name string, language string) {
 	if strings.TrimSpace(name) == "" && len(app.projectList) == 1 {
 		name = app.projectList[0]
 	}
-	entry := app.projects[name]
-	if entry == nil {
-		writeError(response, http.StatusNotFound, fmt.Errorf("project not found"))
+	_, entry, err := app.languageEntry(name, language)
+	if err != nil {
+		writeError(response, http.StatusNotFound, err)
 		return
 	}
 	if app.analyze == nil {
@@ -226,7 +271,7 @@ func (app *App) scan(response http.ResponseWriter, request *http.Request, name s
 	entry.status, entry.err = "loading", ""
 	entry.mu.Unlock()
 
-	index, err := app.analyze(request.Context(), entry.config.Analysis)
+	index, err := app.analyze(request.Context(), entry.config)
 	if err != nil {
 		entry.mu.Lock()
 		entry.status, entry.err = "failed", err.Error()
@@ -241,32 +286,64 @@ func (app *App) scan(response http.ResponseWriter, request *http.Request, name s
 	writeJSON(response, http.StatusOK, RescanResult{FunctionCount: len(index.Functions), LoadReport: index.LoadReport, GitStatus: index.Git})
 }
 
-func (app *App) project(name string) (*project, error) {
+func (app *App) language(name string, language string) (*project, *languageProject, error) {
+	project, languageEntry, err := app.languageEntry(name, language)
+	if err != nil {
+		return nil, nil, err
+	}
+	if languageEntry.index.Load() == nil {
+		return nil, nil, fmt.Errorf("project %q language %q has not been scanned", project.name, languageEntry.config.Language)
+	}
+	return project, languageEntry, nil
+}
+
+func (app *App) languageEntry(name string, language string) (*project, *languageProject, error) {
 	if strings.TrimSpace(name) == "" && len(app.projectList) == 1 {
 		name = app.projectList[0]
 	}
 	entry := app.projects[name]
 	if entry == nil {
-		return nil, fmt.Errorf("project not found")
+		return nil, nil, fmt.Errorf("project not found")
 	}
-	if entry.index.Load() == nil {
-		return nil, fmt.Errorf("project %q has not been scanned", name)
+	if strings.TrimSpace(language) == "" && len(entry.list) == 1 {
+		language = entry.list[0]
 	}
-	return entry, nil
+	languageEntry := entry.languages[language]
+	if languageEntry == nil {
+		return nil, nil, fmt.Errorf("language not found")
+	}
+	return entry, languageEntry, nil
+}
+
+func configLanguage(config analyzer.Config) string {
+	if strings.TrimSpace(config.Language) == "" {
+		return analyzer.LanguageGo
+	}
+	return strings.ToLower(strings.TrimSpace(config.Language))
 }
 
 func (entry *project) snapshot() ProjectStatus {
-	entry.mu.Lock()
-	defer entry.mu.Unlock()
-	result := ProjectStatus{Name: entry.config.Name, Status: entry.status, Error: entry.err}
-	if index := entry.index.Load(); index != nil {
-		result.FunctionCount = len(index.Functions)
+	result := ProjectStatus{Name: entry.name, Status: "ready"}
+	for _, language := range entry.list {
+		languageEntry := entry.languages[language]
+		languageEntry.mu.Lock()
+		status := LanguageStatus{Language: language, Status: languageEntry.status, Error: languageEntry.err}
+		if index := languageEntry.index.Load(); index != nil {
+			status.FunctionCount = len(index.Functions)
+		}
+		languageEntry.mu.Unlock()
+		result.Languages = append(result.Languages, status)
+		if status.Status != "ready" {
+			result.Status = status.Status
+			result.Error = status.Error
+		}
+		result.FunctionCount += status.FunctionCount
 	}
 	return result
 }
 
 func (app *App) handleGitStatus(response http.ResponseWriter, request *http.Request) {
-	entry, err := app.project(request.URL.Query().Get("project"))
+	_, entry, err := app.language(request.URL.Query().Get("project"), request.URL.Query().Get("language"))
 	if err != nil {
 		writeError(response, http.StatusNotFound, err)
 		return
@@ -274,7 +351,7 @@ func (app *App) handleGitStatus(response http.ResponseWriter, request *http.Requ
 	writeJSON(response, http.StatusOK, entry.index.Load().Git)
 }
 func (app *App) handleSearch(response http.ResponseWriter, request *http.Request) {
-	entry, err := app.project(request.URL.Query().Get("project"))
+	_, entry, err := app.language(request.URL.Query().Get("project"), request.URL.Query().Get("language"))
 	if err != nil {
 		writeError(response, http.StatusNotFound, err)
 		return
@@ -282,7 +359,7 @@ func (app *App) handleSearch(response http.ResponseWriter, request *http.Request
 	writeJSON(response, http.StatusOK, entry.index.Load().Search(request.URL.Query().Get("q"), request.URL.Query().Get("tests") == "true", 100))
 }
 func (app *App) handleGraph(response http.ResponseWriter, request *http.Request) {
-	entry, err := app.project(request.URL.Query().Get("project"))
+	_, entry, err := app.language(request.URL.Query().Get("project"), request.URL.Query().Get("language"))
 	if err != nil {
 		writeError(response, http.StatusNotFound, err)
 		return
@@ -296,7 +373,7 @@ func (app *App) handleGraph(response http.ResponseWriter, request *http.Request)
 	writeJSON(response, http.StatusOK, graph)
 }
 func (app *App) handleFunction(response http.ResponseWriter, request *http.Request) {
-	entry, err := app.project(request.URL.Query().Get("project"))
+	_, entry, err := app.language(request.URL.Query().Get("project"), request.URL.Query().Get("language"))
 	if err != nil {
 		writeError(response, http.StatusNotFound, err)
 		return
@@ -313,7 +390,7 @@ func (app *App) handleSummary(response http.ResponseWriter, request *http.Reques
 		writeError(response, http.StatusNotImplemented, fmt.Errorf("AI summarization is disabled; configure --summarizer-command"))
 		return
 	}
-	entry, err := app.project(request.URL.Query().Get("project"))
+	_, entry, err := app.language(request.URL.Query().Get("project"), request.URL.Query().Get("language"))
 	if err != nil {
 		writeError(response, http.StatusNotFound, err)
 		return

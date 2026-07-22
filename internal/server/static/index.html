@@ -43,7 +43,8 @@
     </div>
 
     <div class="controls" aria-label="Workbench controls">
-      <label id="project-control" class="select-control hidden"><span class="control-label">Project</span><select id="project" aria-label="Project"></select></label>
+      <label id="project-control" class="select-control hidden"><span id="project-status" class="status-indicator" aria-hidden="true"></span><span class="control-label">Project</span><select id="project" aria-label="Project"></select></label>
+      <label id="language-control" class="language-control hidden"><span id="language-icon" class="language-icon" aria-hidden="true"><svg data-language-icon="go" viewBox="0 0 24 24"><rect x="2" y="4" width="20" height="16" rx="4"/><text x="12" y="15.5" text-anchor="middle">Go</text></svg><svg data-language-icon="javascript" viewBox="0 0 24 24"><rect x="2" y="4" width="20" height="16" rx="4"/><text x="12" y="15.5" text-anchor="middle">JS</text></svg></span><span id="language-status" class="status-indicator" aria-hidden="true"></span><select id="language" aria-label="Language"></select></label>
       <div class="control-group" aria-label="Canvas tools">
         <button id="zoom-out" class="icon-button" title="Zoom out" aria-label="Zoom out"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5 21 21M7.5 10.5h6"/></svg></button>
         <button id="zoom-in" class="icon-button" title="Zoom in" aria-label="Zoom in"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5 21 21M10.5 7.5v6M7.5 10.5h6"/></svg></button>
@@ -58,7 +59,7 @@
           <button id="changes-button" class="text-button" aria-haspopup="true" aria-expanded="false">Changes 0</button>
           <div id="changes-menu" class="changes-menu hidden" role="menu" aria-label="Changed functions"></div>
         </div>
-        <button id="rescan" class="text-button" title="Rebuild the codebase scan">Rescan codebase</button>
+        <button id="rescan" class="text-button" title="Rebuild the codebase scan"><svg id="rescan-spinner" class="spinner hidden" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="8" opacity=".28"/><path d="M20 12a8 8 0 0 0-8-8" stroke-linecap="round"/></svg><span id="rescan-label">Rescan codebase</span></button>
         <label class="theme-control"><span class="sr-only">Theme</span><select id="theme" title="Color theme" aria-label="Color theme"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select></label>
       </div>
     </div>

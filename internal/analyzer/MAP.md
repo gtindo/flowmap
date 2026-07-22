@@ -20,7 +20,7 @@ This package turns a language-neutral semantic snapshot into an immutable, evide
 
 ## Analysis Pipeline
 
-`Analyze` remains the package entry point and selects the sole built-in Go backend. `AnalyzeWithBackend` makes the internal backend boundary explicit without adding discovery or configuration:
+`Analyze` remains the package entry point and selects the built-in Go or JavaScript backend from `Config.Language`. `AnalyzeWithBackend` makes the internal backend boundary explicit without adding discovery or plugins:
 
 ```text
 Config

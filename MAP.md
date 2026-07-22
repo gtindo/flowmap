@@ -6,12 +6,12 @@ This file is the starting point for code exploration. It describes the repositor
 
 ## Overview
 
-Flowmap is a local code-reading workbench for Go repositories. Its built-in Go backend loads a target module with the Go toolchain and emits a language-neutral semantic snapshot. Flowmap then builds a function-level graph, classifies functions by their relationship to side effects, overlays local Git changes, and serves the result through an embedded browser UI.
+Flowmap is a local code-reading workbench for Go and JavaScript/TypeScript repositories. Built-in language backends emit language-neutral semantic snapshots; Flowmap then builds a function-level graph, classifies functions by their relationship to side effects, overlays local Git changes, and serves the result through an embedded browser UI.
 
 The design follows a functional-core, imperative-shell boundary:
 
 - `internal/semantic/` defines the backend contract and language-neutral semantic facts.
-- `internal/backends/go/` owns Go toolchain, package loading, compiler, and call-graph effects.
+- `internal/backends/go/` owns Go toolchain, package loading, compiler, and call-graph effects; `internal/backends/javascript/` owns standalone JS/TS syntax analysis.
 - `internal/analyzer/` owns deterministic semantic enrichment, classification, graph assembly, Git attribution, and queries.
 - `cmd/flowmap/` owns command-line and process lifecycle effects.
 - `internal/server/` owns HTTP, subprocess summarization, cache, and browser integration effects.
@@ -55,7 +55,7 @@ Defines plain structs for callable symbols, stable identities, source locations,
 
 ### `internal/backends/go/` — Go Semantic Backend
 
-Implements the sole current backend with `go/packages`, AST/type information, SSA, CHA, and VTA. It preserves Flowmap's established IDs and emits semantic facts without performing Flowmap classification. See [`internal/backends/MAP.md`](internal/backends/MAP.md) and [`internal/backends/go/MAP.md`](internal/backends/go/MAP.md).
+Implements the Go backend with `go/packages`, AST/type information, SSA, CHA, and VTA. The JavaScript backend uses standalone syntax analysis for JS, TS, JSX, and TSX. Both preserve stable IDs and emit semantic facts without Flowmap classification. See [`internal/backends/MAP.md`](internal/backends/MAP.md).
 
 ### `internal/server/` — Local Workbench
 
@@ -70,7 +70,7 @@ Configures OpenTelemetry providers, OTLP/gRPC exporters, propagation, and the sl
 ```text
 CLI path or JSON project registry
   -> one or more analyzer.Config values
-  -> built-in Go backend
+  -> selected built-in language backend
   -> language-neutral semantic snapshot
   -> Flowmap classification, graph/index assembly, and load report
   -> Git snapshot

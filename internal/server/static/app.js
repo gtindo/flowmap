@@ -27,9 +27,11 @@ let activeDetailID;
 let activeDetailResize;
 let gitSnapshot;
 let activeProject = "";
+let activeLanguage = "";
 const reviewedFunctionIDs = new Set();
 let reviewedRevision = "";
 const projectPreferenceKey = "flowmap-project:v1";
+const languagePreferenceKey = "flowmap-language:v1";
 const themePreferenceKey = "flowmap-theme:v1";
 const themePreferences = new Set(["system", "light", "dark"]);
 const systemTheme = window.matchMedia("(prefers-color-scheme: dark)");
@@ -37,7 +39,7 @@ const detailMinWidth = 320;
 const detailViewportMargin = 48;
 let preferredDetailWidth = readDetailWidth();
 
-function projectStorageKey(key) { return key + ":" + (activeProject || "default"); }
+function projectStorageKey(key) { return key + ":" + (activeProject || "default") + ":" + (activeLanguage || "go"); }
 function detailWidthKey() { return projectStorageKey("flowmap-detail-width:v1"); }
 function reviewedFunctionsKey() { return projectStorageKey("flowmap-reviewed-functions:v1"); }
 
@@ -54,10 +56,15 @@ const goKeywords = new Set([
 const goBuiltins = new Set([
   "any", "append", "bool", "byte", "cap", "clear", "close", "comparable", "complex", "complex64", "complex128", "copy", "delete", "error", "false", "float32", "float64", "imag", "int", "int8", "int16", "int32", "int64", "iota", "len", "make", "max", "min", "new", "nil", "panic", "print", "println", "real", "recover", "rune", "string", "true", "uint", "uint8", "uint16", "uint32", "uint64", "uintptr"
 ]);
+const javascriptKeywords = new Set([
+  "as", "async", "await", "break", "case", "catch", "class", "const", "continue", "default", "delete", "do", "else", "export", "extends", "finally", "for", "from", "function", "if", "import", "in", "instanceof", "interface", "let", "new", "of", "return", "static", "switch", "throw", "try", "type", "typeof", "var", "while", "yield"
+]);
+const javascriptBuiltins = new Set(["Array", "Boolean", "Date", "Error", "JSON", "Map", "Math", "Number", "Object", "Promise", "RegExp", "Set", "String", "console", "fetch", "undefined"]);
 
 // highlightGo tokenizes into text nodes so source remains safe without an HTML sanitizer.
-function highlightGo(source) {
-  const code = node("code", "language-go");
+function highlightSource(source, language) {
+  const javascript = language === "javascript";
+  const code = node("code", javascript ? "language-javascript" : "language-go");
   const tokenPattern = /\/\/[^\n]*|\/\*[\s\S]*?\*\/|`[^`]*`|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|(?:0[xX][0-9a-fA-F](?:_?[0-9a-fA-F])*|0[bB][01](?:_?[01])*|0[oO][0-7](?:_?[0-7])*|(?:\d(?:_?\d)*\.\d(?:_?\d)*|\.\d(?:_?\d)*|\d(?:_?\d)*)(?:[eE][+-]?\d(?:_?\d)*)?i?)|[A-Za-z_]\w*|\s+|./g;
   for (const match of source.matchAll(tokenPattern)) {
     const token = match[0];
@@ -65,16 +72,16 @@ function highlightGo(source) {
     if (token.startsWith("//") || token.startsWith("/*")) kind = "comment";
     else if (token[0] === '"' || token[0] === "'" || token[0] === "`") kind = "string";
     else if (/^(?:\d|\.\d)/.test(token)) kind = "number";
-    else if (goKeywords.has(token)) kind = "keyword";
-    else if (goBuiltins.has(token)) kind = "builtin";
+    else if ((javascript ? javascriptKeywords : goKeywords).has(token)) kind = "keyword";
+    else if ((javascript ? javascriptBuiltins : goBuiltins).has(token)) kind = "builtin";
     code.append(kind ? node("span", "token " + kind, token) : document.createTextNode(token));
   }
   return code;
 }
 
-function sourceBlock(source) {
+function sourceBlock(source, language = "go") {
   const pre = node("pre", "source-code");
-  pre.append(highlightGo(source));
+  pre.append(highlightSource(source, language));
   return pre;
 }
 
@@ -160,6 +167,9 @@ async function json(url, options) {
   if (activeProject && url.startsWith("/api/") && !url.includes("project=")) {
     url += (url.includes("?") ? "&" : "?") + "project=" + encodeURIComponent(activeProject);
   }
+  if (activeLanguage && url.startsWith("/api/") && !url.includes("language=")) {
+    url += (url.includes("?") ? "&" : "?") + "language=" + encodeURIComponent(activeLanguage);
+  }
   const response = await fetch(url, options);
   const value = await response.json();
   if (!response.ok) {
@@ -171,9 +181,15 @@ async function json(url, options) {
 }
 
 const rescanButton = $("rescan");
+const rescanLabel = $("rescan-label");
+const rescanSpinner = $("rescan-spinner");
 const changesButton = $("changes-button");
 const themeSelect = $("theme");
 const projectSelect = $("project");
+const languageSelect = $("language");
+const languageIcon = $("language-icon");
+const projectStatus = $("project-status");
+const languageStatus = $("language-status");
 const themePreference = readThemePreference();
 themeSelect.value = themePreference;
 applyTheme(themePreference);
@@ -183,6 +199,7 @@ systemTheme.addEventListener("change", () => {
 });
 rescanButton.addEventListener("click", rescanCodebase);
 projectSelect.addEventListener("change", () => selectProject(projectSelect.value));
+languageSelect.addEventListener("change", () => selectLanguage(languageSelect.value));
 changesButton.addEventListener("click", toggleChangesMenu);
 $("search").addEventListener("input", () => { clearTimeout(timer); timer = setTimeout(search, 150); });
 $("search").addEventListener("keydown", event => { if (event.key === "Escape") hideResults(); });
@@ -271,8 +288,7 @@ async function initializeProjects() {
     if (projects.length > 1) $("project-control").classList.remove("hidden");
     projectSelect.replaceChildren();
     projects.forEach(project => {
-      const suffix = project.status === "ready" ? "" : " (" + project.status + ")";
-      const option = node("option", "", project.name + suffix);
+      const option = node("option", "", project.name);
       option.value = project.name;
       option.dataset.status = project.status;
       projectSelect.append(option);
@@ -286,27 +302,64 @@ async function initializeProjects() {
 }
 
 async function selectProject(name, knownProjects) {
-  if (!name || name === activeProject) return;
+  if (!name) return;
   const projects = knownProjects || await json("/api/projects");
   const selected = projects.find(project => project.name === name);
   if (!selected) return;
+  const changed = name !== activeProject;
   activeProject = name;
   projectSelect.value = name;
+
+  setStatusIndicator(projectStatus, selected.status, "Project");
   try { localStorage.setItem(projectPreferenceKey, name); } catch (_) {}
-  resetProjectView();
+  if (changed) resetProjectView();
+  preferredDetailWidth = readDetailWidth();
+  applyDetailWidth(preferredDetailWidth);
+  const languages = selected.languages || [{ language: "go", status: selected.status }];
+  languageSelect.replaceChildren();
+  languages.forEach(item => {
+    const option = node("option", "", item.language);
+    option.value = item.language;
+    option.dataset.status = item.status;
+    languageSelect.append(option);
+  });
+  if (languages.length > 1) $("language-control").classList.remove("hidden");
+  else $("language-control").classList.add("hidden");
+  const savedLanguage = (() => { try { return localStorage.getItem(languagePreferenceKey + ":" + name); } catch (_) { return ""; } })();
+  const language = languages.find(item => item.language === savedLanguage) || languages[0];
+  if (language) await selectLanguage(language.language, languages);
+}
+
+async function selectLanguage(language, knownLanguages) {
+  if (!language) return;
+  const languages = knownLanguages || Array.from(languageSelect.options).map(option => ({ language: option.value, status: option.dataset.status }));
+  const selected = languages.find(item => item.language === language);
+  if (!selected) return;
+  const changed = language !== activeLanguage;
+  activeLanguage = language;
+  languageSelect.value = language;
+  updateLanguageIcon(language);
+  setStatusIndicator(languageStatus, selected.status, "Language");
+  try { localStorage.setItem(languagePreferenceKey + ":" + activeProject, language); } catch (_) {}
+  if (changed) resetProjectView();
   preferredDetailWidth = readDetailWidth();
   applyDetailWidth(preferredDetailWidth);
   if (selected.status !== "ready") {
-    rescanButton.disabled = true;
-    rescanButton.textContent = "Scanning…";
+    setScanLoading(true);
     try {
-      const result = await json("/api/projects/" + encodeURIComponent(name) + "/scan", { method: "POST" });
+      const result = await json("/api/projects/" + encodeURIComponent(activeProject) + "/languages/" + encodeURIComponent(language) + "/scan", { method: "POST" });
+      selected.status = "ready";
+      languageSelect.selectedOptions[0].dataset.status = "ready";
+      projectSelect.selectedOptions[0].dataset.status = "ready";
+      setStatusIndicator(languageStatus, "ready", "Language");
+      setStatusIndicator(projectStatus, "ready", "Project");
       renderGitStatus(result.git_status);
     } catch (error) {
+      selected.status = "failed";
+      setStatusIndicator(languageStatus, "failed", "Language");
       alert(error.message);
     } finally {
-      rescanButton.disabled = false;
-      rescanButton.textContent = "Rescan codebase";
+      setScanLoading(false);
     }
   }
   await loadGitStatus();
@@ -471,9 +524,8 @@ function showEmptyAfterRescan() {
 }
 
 async function rescanCodebase() {
-  const previousLabel = rescanButton.textContent;
-  rescanButton.disabled = true;
-  rescanButton.textContent = "Scanning…";
+  const previousLabel = rescanLabel.textContent;
+  setScanLoading(true);
   try {
     const result = await json("/api/rescan", { method: "POST" });
     if ((result.git_status.revision || "") !== reviewedRevision) loadReviewedFunctions(result.git_status.revision);
@@ -490,15 +542,32 @@ async function rescanCodebase() {
     } else if ($("search").value.trim()) {
       await search();
     }
-    const failures = result.load_report.failed_package_variants || result.load_report.FailedPackageVariants || 0;
-    rescanButton.textContent = failures ? `Rescanned (${failures} warnings)` : `Rescanned ${result.function_count}`;
-    setTimeout(() => { if (!rescanButton.disabled) rescanButton.textContent = previousLabel; }, 1800);
+    const failures = result.load_report.failed_units || result.load_report.failed_package_variants || result.load_report.FailedPackageVariants || 0;
+    rescanLabel.textContent = failures ? `Rescanned (${failures} warnings)` : `Rescanned ${result.function_count}`;
+    setTimeout(() => { if (!rescanButton.disabled) rescanLabel.textContent = previousLabel; }, 1800);
   } catch (error) {
     alert(error.message);
-    rescanButton.textContent = previousLabel;
+    rescanLabel.textContent = previousLabel;
   } finally {
-    rescanButton.disabled = false;
+    setScanLoading(false);
   }
+}
+
+function setStatusIndicator(indicator, status, scope) {
+  const normalized = ["ready", "unscanned", "loading", "failed"].includes(status) ? status : "unscanned";
+  indicator.className = "status-indicator " + normalized;
+  indicator.title = `${scope}: ${normalized}`;
+}
+
+function updateLanguageIcon(language) {
+  languageIcon.querySelectorAll("svg").forEach(icon => icon.classList.toggle("active", icon.dataset.languageIcon === language));
+  languageIcon.title = language === "go" ? "Go" : "JavaScript and TypeScript";
+}
+
+function setScanLoading(loading) {
+	// The former “Scanning…” label is intentionally replaced by the spinner.
+	rescanButton.disabled = loading;
+  rescanSpinner.classList.toggle("hidden", !loading);
 }
 
 function graphURL(id) {
@@ -1081,7 +1150,7 @@ function renderDetail(item) {
   (item.classification.evidence || []).forEach(evidence => content.append(node("div", "muted", "• " + evidence)));
   const sourceHeading = node("div", "source-heading");
   sourceHeading.append(node("h3", "", "Source"));
-  const source = sourceBlock(item.source);
+  const source = sourceBlock(item.source, item.language);
   content.append(sourceHeading, source);
   if (item.change) {
     const toggle = node("button", "diff-toggle", "Show diff");

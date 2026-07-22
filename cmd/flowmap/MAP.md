@@ -16,7 +16,7 @@ This package is Flowmap's executable shell. It translates command-line input int
 ```text
 main
   -> run
-  -> parse serve flags and module path or `--config` registry
+  -> parse serve flags and module path or `--config` registry, then detect configured Go and/or JavaScript language views
   -> signal.NotifyContext
   -> telemetry.Setup when OTLP environment configuration is present
   -> analyzer.Analyze for legacy one-project mode, or server.NewProjects for lazy registry scans

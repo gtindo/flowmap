@@ -291,6 +291,7 @@ input:focus-visible {
 }
 
 .text-button { padding: 4px 8px; white-space: nowrap; }
+.text-button { display: inline-flex; align-items: center; gap: 6px; }
 .icon-button:hover,
 .text-button:hover,
 .detail-actions button:hover,
@@ -322,6 +323,41 @@ input:focus-visible {
   cursor: pointer;
   font-size: 11px;
 }
+
+.status-indicator {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 7px;
+  border-radius: 50%;
+  background: var(--text-faint);
+  box-shadow: 0 0 0 2px color-mix(in srgb, currentColor 12%, transparent);
+}
+.status-indicator.ready { background: var(--pure); color: var(--pure); }
+.status-indicator.unscanned { background: var(--unknown); color: var(--unknown); }
+.status-indicator.loading { background: var(--accent); color: var(--accent); }
+.status-indicator.failed { background: var(--edge); color: var(--edge); }
+
+.language-control {
+  position: relative;
+  width: 30px;
+  height: 28px;
+  display: inline-grid;
+  place-items: center;
+  border-radius: 5px;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.language-control:hover { background: var(--surface-hover); color: var(--text-strong); }
+.language-icon { width: 17px; height: 17px; }
+.language-icon svg { display: none; width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.7; }
+.language-icon svg.active { display: block; }
+.language-icon text { fill: currentColor; stroke: none; font: 700 8px/1 ui-sans-serif, sans-serif; letter-spacing: -.35px; }
+.language-control .status-indicator { position: absolute; right: 2px; bottom: 2px; width: 6px; height: 6px; flex-basis: 6px; box-shadow: 0 0 0 2px var(--header-bg); }
+.language-control select { position: absolute; inset: 0; width: 100%; opacity: 0; cursor: pointer; }
+
+.spinner { animation: spin 700ms linear infinite; }
+.spinner.hidden { display: none; }
+@keyframes spin { to { transform: rotate(360deg); } }
 
 .toggle-control {
   height: 28px;

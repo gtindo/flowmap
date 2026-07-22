@@ -20,16 +20,31 @@ func TestSplitTags(t *testing.T) {
 
 func TestLoadProjectsValidatesRegistry(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "projects.json")
-	if err := os.WriteFile(path, []byte(`{"projects":[{"name":"API","path":"./api","tags":["integration"]},{"name":"Web","path":"./web"}]}`), 0o600); err != nil {
+	api := filepath.Join(filepath.Dir(path), "api")
+	web := filepath.Join(filepath.Dir(path), "web")
+	if err := os.MkdirAll(api, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(web, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(api, "go.mod"), []byte("module example.com/api\n\ngo 1.25\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(web, "app.ts"), []byte("export function Root() {}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	registry := `{"projects":[{"name":"API","path":"` + api + `","tags":["integration"]},{"name":"Web","path":"` + web + `"}]}`
+	if err := os.WriteFile(path, []byte(registry), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
 	projects, err := loadProjects(path)
-	if err != nil || len(projects) != 2 || projects[0].Name != "API" || projects[0].Analysis.BuildTags[0] != "integration" || !filepath.IsAbs(projects[1].Analysis.Root) {
+	if err != nil || len(projects) != 2 || projects[0].Name != "API" || projects[0].Analyses[0].BuildTags[0] != "integration" || !filepath.IsAbs(projects[1].Analyses[0].Root) {
 		t.Fatalf("loadProjects() = %#v, %v", projects, err)
 	}
 
-	if err := os.WriteFile(path, []byte(`{"projects":[{"name":"API","path":"./api"},{"name":"API","path":"./web"}]}`), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte(`{"projects":[{"name":"API","path":"`+api+`"},{"name":"API","path":"`+web+`"}]}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := loadProjects(path); err == nil || !strings.Contains(err.Error(), "duplicate name") {

@@ -156,16 +156,25 @@ func currentFunctionSpans(repositoryRoot string, functions map[string]Function) 
 		if err != nil {
 			continue
 		}
-		fileSet := token.NewFileSet()
-		parsed, err := parser.ParseFile(fileSet, filename, contents, parser.ParseComments)
-		if err != nil {
-			continue
-		}
 		relative, err := filepath.Rel(repositoryRoot, resolvedPath(filename))
 		if err != nil || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
 			continue
 		}
 		path := filepath.ToSlash(relative)
+		if !strings.HasSuffix(filename, ".go") {
+			for _, function := range byLine {
+				result[path] = append(result[path], functionSpan{
+					id: function.ID, key: path + "|" + function.QualifiedName, path: path,
+					start: function.Line, end: function.EndLine, source: function.Source,
+				})
+			}
+			continue
+		}
+		fileSet := token.NewFileSet()
+		parsed, err := parser.ParseFile(fileSet, filename, contents, parser.ParseComments)
+		if err != nil {
+			continue
+		}
 		for _, declaration := range parsed.Decls {
 			functionDeclaration, ok := declaration.(*ast.FuncDecl)
 			if !ok {
@@ -211,6 +220,15 @@ func baselineFunctionKeys(ctx context.Context, repositoryRoot string, pathspec s
 	result := make(map[string]bool)
 	for _, path := range paths {
 		if !strings.HasSuffix(path, ".go") {
+			if supportedJavaScriptPath(path) {
+				contents, showErr := gitOutput(ctx, repositoryRoot, "show", "HEAD:"+path)
+				if showErr == nil {
+					for _, name := range javascriptDeclarationNames(string(contents)) {
+						qualified := strings.TrimSuffix(path, filepath.Ext(path)) + "." + name
+						result[path+"|"+qualified] = true
+					}
+				}
+			}
 			continue
 		}
 		contents, err := gitOutput(ctx, repositoryRoot, "show", "HEAD:"+path)
@@ -228,6 +246,32 @@ func baselineFunctionKeys(ctx context.Context, repositoryRoot string, pathspec s
 		}
 	}
 	return result
+}
+
+var javascriptDeclarationPattern = regexp.MustCompile(`(?m)(?:^|[;\n])\s*(?:export\s+)?(?:async\s+)?function\s+([A-Za-z_$][A-Za-z0-9_$]*)|(?:^|[;\n])\s*(?:export\s+)?(?:const|let|var)\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*(?:async\s*)?(?:\([^)]*\)|[A-Za-z_$][A-Za-z0-9_$]*)\s*=>`)
+
+func supportedJavaScriptPath(path string) bool {
+	switch strings.ToLower(filepath.Ext(path)) {
+	case ".js", ".mjs", ".cjs", ".jsx", ".ts", ".mts", ".cts", ".tsx":
+		return !strings.HasSuffix(path, ".d.ts")
+	default:
+		return false
+	}
+}
+
+func javascriptDeclarationNames(source string) []string {
+	matches := javascriptDeclarationPattern.FindAllStringSubmatch(source, -1)
+	names := make([]string, 0, len(matches))
+	for _, match := range matches {
+		if match[1] != "" {
+			names = append(names, match[1])
+			continue
+		}
+		if match[2] != "" {
+			names = append(names, match[2])
+		}
+	}
+	return names
 }
 
 func declarationKey(path string, packageName string, declaration *ast.FuncDecl) string {

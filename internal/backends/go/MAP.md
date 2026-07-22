@@ -2,7 +2,7 @@
 
 ## Responsibility
 
-This package is Flowmap's sole current language backend under the `internal/backends/` hierarchy. It contains all `go/packages`, AST, type-checking, SSA, CHA, and VTA analysis used to produce a language-neutral `semantic.Snapshot`.
+This package is Flowmap's Go language backend under the `internal/backends/` hierarchy. It contains all `go/packages`, AST, type-checking, SSA, CHA, and VTA analysis used to produce a language-neutral `semantic.Snapshot`.
 
 ## Files
 

@@ -113,20 +113,28 @@ func run(arguments []string) error {
 		return app.Listen(ctx, *address)
 	}
 
-	analysisConfig := analyzer.Config{Root: modulePath, BuildTags: splitTags(*buildTags)}
-	index, err := analyzer.Analyze(ctx, analysisConfig)
+	analysisConfigs, err := detectAnalysisConfigs(modulePath, splitTags(*buildTags), nil)
+	if err != nil {
+		return err
+	}
+	indexes := make(map[string]*analyzer.Index, len(analysisConfigs))
+	functionCount := 0
+	for _, analysisConfig := range analysisConfigs {
+		index, analyzeErr := analyzer.Analyze(ctx, analysisConfig)
+		if analyzeErr != nil {
+			return analyzeErr
+		}
+		writeLoadWarning(os.Stderr, index.LoadReport)
+		indexes[analysisConfig.Language] = index
+		functionCount += len(index.Functions)
+	}
+	app, err := server.NewRescannableLanguages(indexes, summarizer, cache, analysisConfigs)
 	if err != nil {
 		return err
 	}
 
-	writeLoadWarning(os.Stderr, index.LoadReport)
-	app, err := server.NewRescannable(index, summarizer, cache, analysisConfig)
-	if err != nil {
-		return err
-	}
-
-	fmt.Printf("Flowmap indexed %d functions. Open http://%s\n", len(index.Functions), *address)
-	slog.InfoContext(ctx, "flowmap server starting", "address", *address, "functions", len(index.Functions))
+	fmt.Printf("Flowmap indexed %d functions across %d language views. Open http://%s\n", functionCount, len(analysisConfigs), *address)
+	slog.InfoContext(ctx, "flowmap server starting", "address", *address, "functions", functionCount, "languages", len(analysisConfigs))
 
 	return app.Listen(ctx, *address)
 }
@@ -136,9 +144,10 @@ type projectRegistry struct {
 }
 
 type projectEntry struct {
-	Name string   `json:"name"`
-	Path string   `json:"path"`
-	Tags []string `json:"tags"`
+	Name      string   `json:"name"`
+	Path      string   `json:"path"`
+	Tags      []string `json:"tags"`
+	Languages []string `json:"languages"`
 }
 
 // loadProjects validates the JSON registry supplied to the multi-project server.
@@ -178,9 +187,81 @@ func loadProjects(path string) ([]server.ProjectConfig, error) {
 		}
 		names[name] = struct{}{}
 		paths[absoluteRoot] = struct{}{}
-		projects = append(projects, server.ProjectConfig{Name: name, Analysis: analyzer.Config{Root: absoluteRoot, BuildTags: normalizeTags(entry.Tags)}})
+		analyses, configErr := detectAnalysisConfigs(absoluteRoot, normalizeTags(entry.Tags), entry.Languages)
+		if configErr != nil {
+			return nil, fmt.Errorf("configure project %q: %w", name, configErr)
+		}
+		projects = append(projects, server.ProjectConfig{Name: name, Analyses: analyses})
 	}
 	return projects, nil
+}
+
+func detectAnalysisConfigs(root string, tags []string, requested []string) ([]analyzer.Config, error) {
+	absRoot, err := filepath.Abs(root)
+	if err != nil {
+		return nil, fmt.Errorf("resolve project root: %w", err)
+	}
+	detected := map[string]bool{}
+	if _, statErr := os.Stat(filepath.Join(absRoot, "go.mod")); statErr == nil {
+		detected[analyzer.LanguageGo] = true
+	}
+	jsFound := false
+	_ = filepath.WalkDir(absRoot, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil || jsFound {
+			return walkErr
+		}
+		if entry.IsDir() {
+			switch entry.Name() {
+			case ".git", "node_modules", "vendor", "dist", "build", "coverage", ".next", "out":
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		extension := strings.ToLower(filepath.Ext(path))
+		switch extension {
+		case ".js", ".mjs", ".cjs", ".jsx", ".ts", ".mts", ".cts", ".tsx":
+			if !strings.HasSuffix(path, ".d.ts") {
+				jsFound = true
+			}
+		}
+		return nil
+	})
+	if jsFound {
+		detected[analyzer.LanguageJavaScript] = true
+	}
+	languages := requested
+	if len(languages) == 0 {
+		languages = make([]string, 0, len(detected))
+		for _, language := range []string{analyzer.LanguageGo, analyzer.LanguageJavaScript} {
+			if detected[language] {
+				languages = append(languages, language)
+			}
+		}
+	}
+	configs := make([]analyzer.Config, 0, len(languages))
+	seen := map[string]bool{}
+	for _, language := range languages {
+		language = strings.ToLower(strings.TrimSpace(language))
+		if language != analyzer.LanguageGo && language != analyzer.LanguageJavaScript {
+			return nil, fmt.Errorf("unsupported language %q", language)
+		}
+		if seen[language] {
+			return nil, fmt.Errorf("duplicate language %q", language)
+		}
+		if !detected[language] {
+			return nil, fmt.Errorf("no %s source detected beneath %s", language, absRoot)
+		}
+		seen[language] = true
+		config := analyzer.Config{Root: absRoot, Language: language}
+		if language == analyzer.LanguageGo {
+			config.BuildTags = append([]string(nil), tags...)
+		}
+		configs = append(configs, config)
+	}
+	if len(configs) == 0 {
+		return nil, fmt.Errorf("no supported source detected beneath %s", absRoot)
+	}
+	return configs, nil
 }
 
 func normalizeTags(tags []string) []string {

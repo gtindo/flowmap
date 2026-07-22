@@ -34,6 +34,7 @@ type Function struct {
 	Name           string          `json:"name"`
 	QualifiedName  string          `json:"qualified_name"`
 	Package        string          `json:"package"`
+	Language       string          `json:"language"`
 	Signature      string          `json:"signature"`
 	Parameters     []string        `json:"parameters"`
 	Results        []string        `json:"results"`
@@ -90,6 +91,7 @@ type Graph struct {
 // Index is an immutable analysis result safe for concurrent readers.
 type Index struct {
 	Root       string
+	Language   string
 	Functions  map[string]Function
 	Edges      []Edge
 	Outgoing   map[string][]Edge

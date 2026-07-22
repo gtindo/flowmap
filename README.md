@@ -3,7 +3,7 @@
 ![Flowmap Logo](internal/server/static/icon-192.png)
 <!-- PLACEHOLDER: Flowmap Logo Image -->
 
-Flowmap is a local, spatial code-review workbench for auditing rapid structural changes and code flux in Go repositories. When AI agents write hundreds of lines across multiple files in seconds, traditional file-tree IDEs can create cognitive overload. Flowmap replaces the file tree with an interactive, function-level call graph designed for rapid architectural supervision.
+Flowmap is a local, spatial code-review workbench for auditing rapid structural changes and code flux in Go, JavaScript, and TypeScript repositories. When AI agents write hundreds of lines across multiple files in seconds, traditional file-tree IDEs can create cognitive overload. Flowmap replaces the file tree with an interactive, function-level call graph designed for rapid architectural supervision.
 
 For installation and usage instructions, see [USER_GUIDE.md](USER_GUIDE.md) or the [Flowmap documentation site](https://gtindo.github.io/flowmap/).
 
@@ -25,7 +25,7 @@ For installation and usage instructions, see [USER_GUIDE.md](USER_GUIDE.md) or t
 >
 > - **An AI chatbot or tutor:** It does not explain basic code logic or provide automated walkthroughs.
 > - **A runtime tracer:** It performs static analysis. A call edge means a function *may* call another; it does not trace live state or execution variables.
-> - **A generic multi-language tool:** It is built for the Go ecosystem and uses first-party toolchain precision.
+> - **A generic multi-language tool:** It supports Go plus a standalone JavaScript/TypeScript view; it does not emulate package-manager or bundler resolution.
 
 ---
 
@@ -44,12 +44,12 @@ flowmap serve --config projects.json
 ```
 
 ```json
-{"projects":[{"name":"API","path":"/work/api","tags":["integration"]},{"name":"Web","path":"/work/web"}]}
+{"projects":[{"name":"API","path":"/work/api","tags":["integration"],"languages":["go"]},{"name":"Web","path":"/work/web","languages":["javascript"]}]}
 ```
 
 To keep Flowmap in the macOS Dock, open the running workbench in Safari and choose **File > Add to Dock**, or use **Install Flowmap** in Chrome. The installed web app uses the same host and port; it does not start the Flowmap server. See the user guide for details.
 
-Tests are indexed but hidden until the **Tests** toggle is enabled. Anonymous functions appear when traversing their named parents but stay out of search and Git change lists. Non-local packages remain outside the visible graph. Dashed edges are interface or dynamic-dispatch candidates, while dotted edges show local functions passed as arguments.
+Tests are indexed but hidden until the **Tests** toggle is enabled. A mixed repository exposes a language picker so Go and JavaScript/TypeScript remain separate graphs. JavaScript support covers `.js`, `.mjs`, `.cjs`, `.jsx`, `.ts`, `.mts`, `.cts`, and `.tsx` without requiring Node.js; it follows only relative local imports. Anonymous functions appear when traversing their named parents but stay out of search and Git change lists. Non-local packages remain outside the visible graph. Dashed edges are interface or dynamic-dispatch candidates, while dotted edges show local functions passed as arguments.
 
 ## Navigate the Graph and Audit Flux
 

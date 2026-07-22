@@ -96,10 +96,12 @@ func (Backend) Analyze(ctx context.Context, request semantic.AnalysisRequest) (s
 	sort.Strings(ids)
 	symbols := make([]semantic.Symbol, 0, len(ids))
 	for _, id := range ids {
-		symbols = append(symbols, metas[id].symbol)
+		symbol := metas[id].symbol
+		symbol.Language = "go"
+		symbols = append(symbols, symbol)
 	}
 
-	return semantic.Snapshot{Root: root, Symbols: symbols, Relationships: relationships, Diagnostics: diagnostics}, nil
+	return semantic.Snapshot{Root: root, Language: "go", Symbols: symbols, Relationships: relationships, Diagnostics: diagnostics}, nil
 }
 
 func packagesByTypes(roots []*packages.Package) map[*types.Package]*packages.Package {
