@@ -37,6 +37,16 @@ go run ./cmd/flowmap serve /path/to/go/module
 
 Open `http://127.0.0.1:7878`, search for a function, and choose upstream, downstream, or both directions. Use `--tags tag1,tag2` for build tags and `--addr 127.0.0.1:9000` to change the local address.
 
+To serve several projects from one workbench, provide a JSON registry. Projects are scanned only when selected in the project picker:
+
+```sh
+flowmap serve --config projects.json
+```
+
+```json
+{"projects":[{"name":"API","path":"/work/api","tags":["integration"]},{"name":"Web","path":"/work/web"}]}
+```
+
 To keep Flowmap in the macOS Dock, open the running workbench in Safari and choose **File > Add to Dock**, or use **Install Flowmap** in Chrome. The installed web app uses the same host and port; it does not start the Flowmap server. See the user guide for details.
 
 Tests are indexed but hidden until the **Tests** toggle is enabled. Anonymous functions appear when traversing their named parents but stay out of search and Git change lists. Non-local packages remain outside the visible graph. Dashed edges are interface or dynamic-dispatch candidates, while dotted edges show local functions passed as arguments.
@@ -59,12 +69,16 @@ A function is inferred pure only when it has no visible effects, no effect-unkno
 ## HTTP API
 
 ```text
+GET  /api/projects
+POST /api/projects/<name>/scan
 GET  /api/search?q=<text>&tests=<bool>
 GET  /api/graph?root=<id>&direction=<upstream|downstream|both>&depth=<0..8>&tests=<bool>
 GET  /api/functions/<id>
 GET  /api/git-status
-POST /api/rescan
+POST /api/rescan?project=<name>
 ```
+
+All project data endpoints accept `project=<name>` in multi-project mode. Legacy one-project requests continue to work without it.
 
 ## Development
 

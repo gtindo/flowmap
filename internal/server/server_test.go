@@ -342,6 +342,46 @@ func TestSummaryEndpointMarksGeneratedIntent(t *testing.T) {
 	}
 }
 
+func TestProjectsScanLazilyAndKeepFailuresIsolated(t *testing.T) {
+	configs := []ProjectConfig{
+		{Name: "good", Analysis: analyzer.Config{Root: "/work/good"}},
+		{Name: "bad", Analysis: analyzer.Config{Root: "/work/bad"}},
+	}
+	app, err := newRegistry(configs, nil, nil, nil, func(_ context.Context, config analyzer.Config) (*analyzer.Index, error) {
+		if config.Root == "/work/bad" {
+			return nil, fmt.Errorf("broken source")
+		}
+		return fixtureIndex(), nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	projects := httptest.NewRecorder()
+	app.Handler().ServeHTTP(projects, httptest.NewRequest(http.MethodGet, "/api/projects", nil))
+	if projects.Code != http.StatusOK || !strings.Contains(projects.Body.String(), `"status":"unscanned"`) {
+		t.Fatalf("initial projects = %d %s", projects.Code, projects.Body.String())
+	}
+
+	good := httptest.NewRecorder()
+	app.Handler().ServeHTTP(good, httptest.NewRequest(http.MethodPost, "/api/projects/good/scan", nil))
+	if good.Code != http.StatusOK || !strings.Contains(good.Body.String(), `"function_count":2`) {
+		t.Fatalf("good scan = %d %s", good.Code, good.Body.String())
+	}
+
+	bad := httptest.NewRecorder()
+	app.Handler().ServeHTTP(bad, httptest.NewRequest(http.MethodPost, "/api/projects/bad/scan", nil))
+	if bad.Code != http.StatusInternalServerError || !strings.Contains(bad.Body.String(), "broken source") {
+		t.Fatalf("bad scan = %d %s", bad.Code, bad.Body.String())
+	}
+
+	search := httptest.NewRecorder()
+	app.Handler().ServeHTTP(search, httptest.NewRequest(http.MethodGet, "/api/search?project=good&q=Root", nil))
+	if search.Code != http.StatusOK || !strings.Contains(search.Body.String(), "sample.Root") {
+		t.Fatalf("good project unavailable after bad scan: %d %s", search.Code, search.Body.String())
+	}
+}
+
 // fixtureIndex returns a minimal immutable graph for HTTP tests.
 func fixtureIndex() *analyzer.Index {
 	root := analyzer.Function{ID: "root", QualifiedName: "sample.Root", Package: "sample", File: "/work/sample.go", Line: 10, Classification: analyzer.Classification{Kind: "pure"}, Change: &analyzer.FunctionChange{Kind: "updated", Diff: "--- a/sample.go\n+++ b/sample.go\n@@ -1 +1 @@\n-old\n+new\n"}}

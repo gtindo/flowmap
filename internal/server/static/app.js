@@ -26,16 +26,20 @@ let detailController;
 let activeDetailID;
 let activeDetailResize;
 let gitSnapshot;
+let activeProject = "";
 const reviewedFunctionIDs = new Set();
 let reviewedRevision = "";
-const detailWidthKey = "flowmap-detail-width:v1";
-const reviewedFunctionsKey = "flowmap-reviewed-functions:v1";
+const projectPreferenceKey = "flowmap-project:v1";
 const themePreferenceKey = "flowmap-theme:v1";
 const themePreferences = new Set(["system", "light", "dark"]);
 const systemTheme = window.matchMedia("(prefers-color-scheme: dark)");
 const detailMinWidth = 320;
 const detailViewportMargin = 48;
 let preferredDetailWidth = readDetailWidth();
+
+function projectStorageKey(key) { return key + ":" + (activeProject || "default"); }
+function detailWidthKey() { return projectStorageKey("flowmap-detail-width:v1"); }
+function reviewedFunctionsKey() { return projectStorageKey("flowmap-reviewed-functions:v1"); }
 
 function node(tag, cls, text) {
   const value = document.createElement(tag);
@@ -111,7 +115,7 @@ function selectTheme(event) {
 
 function readDetailWidth() {
   try {
-    const width = Number(localStorage.getItem(detailWidthKey));
+    const width = Number(localStorage.getItem(detailWidthKey()));
     return Number.isFinite(width) && width > 0 ? width : undefined;
   } catch (_) { return undefined; }
 }
@@ -149,10 +153,13 @@ function finishDetailResize(event) {
   event.stopPropagation();
   activeDetailResize.handle.classList.remove("resizing");
   activeDetailResize = undefined;
-  try { localStorage.setItem(detailWidthKey, String(preferredDetailWidth)); } catch (_) {}
+  try { localStorage.setItem(detailWidthKey(), String(preferredDetailWidth)); } catch (_) {}
 }
 
 async function json(url, options) {
+  if (activeProject && url.startsWith("/api/") && !url.includes("project=")) {
+    url += (url.includes("?") ? "&" : "?") + "project=" + encodeURIComponent(activeProject);
+  }
   const response = await fetch(url, options);
   const value = await response.json();
   if (!response.ok) {
@@ -166,6 +173,7 @@ async function json(url, options) {
 const rescanButton = $("rescan");
 const changesButton = $("changes-button");
 const themeSelect = $("theme");
+const projectSelect = $("project");
 const themePreference = readThemePreference();
 themeSelect.value = themePreference;
 applyTheme(themePreference);
@@ -174,6 +182,7 @@ systemTheme.addEventListener("change", () => {
   if (readThemePreference() === "system") applyTheme("system");
 });
 rescanButton.addEventListener("click", rescanCodebase);
+projectSelect.addEventListener("change", () => selectProject(projectSelect.value));
 changesButton.addEventListener("click", toggleChangesMenu);
 $("search").addEventListener("input", () => { clearTimeout(timer); timer = setTimeout(search, 150); });
 $("search").addEventListener("keydown", event => { if (event.key === "Escape") hideResults(); });
@@ -208,7 +217,7 @@ window.addEventListener("resize", () => {
   if (currentGraph) applyViewport();
 });
 applyDetailWidth(preferredDetailWidth);
-loadGitStatus();
+initializeProjects();
 
 if ("serviceWorker" in navigator) {
   window.addEventListener("load", () => {
@@ -231,12 +240,12 @@ function loadReviewedFunctions(revision) {
   reviewedFunctionIDs.clear();
   reviewedRevision = revision || "";
   if (!reviewedRevision) {
-    try { localStorage.removeItem(reviewedFunctionsKey); } catch (_) {}
+    try { localStorage.removeItem(reviewedFunctionsKey()); } catch (_) {}
     return;
   }
 
   try {
-    const stored = JSON.parse(localStorage.getItem(reviewedFunctionsKey) || "null");
+    const stored = JSON.parse(localStorage.getItem(reviewedFunctionsKey()) || "null");
     if (stored?.revision === reviewedRevision && Array.isArray(stored.function_ids)) {
       stored.function_ids.filter(id => typeof id === "string").forEach(id => reviewedFunctionIDs.add(id));
       return;
@@ -249,11 +258,80 @@ function loadReviewedFunctions(revision) {
 function saveReviewedFunctions() {
   if (!reviewedRevision) return;
   try {
-    localStorage.setItem(reviewedFunctionsKey, JSON.stringify({
+    localStorage.setItem(reviewedFunctionsKey(), JSON.stringify({
       revision: reviewedRevision,
       function_ids: Array.from(reviewedFunctionIDs),
     }));
   } catch (_) {}
+}
+
+async function initializeProjects() {
+  try {
+    const projects = await json("/api/projects");
+    if (projects.length > 1) $("project-control").classList.remove("hidden");
+    projectSelect.replaceChildren();
+    projects.forEach(project => {
+      const suffix = project.status === "ready" ? "" : " (" + project.status + ")";
+      const option = node("option", "", project.name + suffix);
+      option.value = project.name;
+      option.dataset.status = project.status;
+      projectSelect.append(option);
+    });
+    const saved = (() => { try { return localStorage.getItem(projectPreferenceKey); } catch (_) { return ""; } })();
+    const selected = projects.find(project => project.name === saved) || projects[0];
+    if (selected) await selectProject(selected.name, projects);
+  } catch (error) {
+    alert(error.message);
+  }
+}
+
+async function selectProject(name, knownProjects) {
+  if (!name || name === activeProject) return;
+  const projects = knownProjects || await json("/api/projects");
+  const selected = projects.find(project => project.name === name);
+  if (!selected) return;
+  activeProject = name;
+  projectSelect.value = name;
+  try { localStorage.setItem(projectPreferenceKey, name); } catch (_) {}
+  resetProjectView();
+  preferredDetailWidth = readDetailWidth();
+  applyDetailWidth(preferredDetailWidth);
+  if (selected.status !== "ready") {
+    rescanButton.disabled = true;
+    rescanButton.textContent = "Scanning…";
+    try {
+      const result = await json("/api/projects/" + encodeURIComponent(name) + "/scan", { method: "POST" });
+      renderGitStatus(result.git_status);
+    } catch (error) {
+      alert(error.message);
+    } finally {
+      rescanButton.disabled = false;
+      rescanButton.textContent = "Rescan codebase";
+    }
+  }
+  await loadGitStatus();
+}
+
+function resetProjectView() {
+  graphGeneration++;
+  searchGeneration++;
+  rootID = "";
+  currentGraph = undefined;
+  currentPositions = new Map();
+  expansionRecords = new Map();
+  expandedNodes = new Set();
+  focusHistory = [];
+  focusHistoryIndex = -1;
+  reviewedFunctionIDs.clear();
+  reviewedRevision = "";
+  hideDetail();
+  hideResults();
+  $("search").value = "";
+  $("workspace").classList.add("hidden");
+  $("empty").classList.remove("hidden");
+  $("empty").querySelector("h1").textContent = "Begin with a function.";
+  $("empty").querySelector("p").textContent = "Search by package, receiver, or name. Flowmap reveals a focused typed neighborhood—not the whole-repository hairball.";
+  updateHistoryButtons();
 }
 
 function resetReviewedFunctions() {
@@ -909,7 +987,7 @@ function applyViewport(preserveCenter = true) {
 }
 
 function layoutKey() {
-  return "flowmap-layout:v2:" + $("view").value + ":" + rootID + ":" + $("direction").value + ":" + $("tests").checked;
+  return "flowmap-layout:v2:" + (activeProject || "default") + ":" + $("view").value + ":" + rootID + ":" + $("direction").value + ":" + $("tests").checked;
 }
 
 function readSavedPositions() {
