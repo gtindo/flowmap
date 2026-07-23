@@ -12,7 +12,7 @@ This package turns a language-neutral semantic snapshot into an immutable, evide
 | `analyzer.go` | Built-in-backend entry point and pure semantic-to-`Index` translation of symbols, contracts, relationships, source, intent, and diagnostics |
 | `classify.go` | Authored labels, direct side-effect evidence, known-pure packages, and conservative purity propagation |
 | `query.go` | Deterministic symbol search, function lookup, and bounded upstream/downstream graph traversal |
-| `git.go` | Non-fatal Git snapshot capture and attribution of `HEAD` diffs or untracked files to current functions |
+| `git.go` | Non-fatal Git snapshot capture and attribution of `HEAD` diffs or untracked files to current callables, including owner-qualified JavaScript class methods |
 | `git_hierarchy.go` | Pure changed-function reachability, recursive-component collapse, leaf counts, and review ordering |
 | `load_diagnostics.go` | Translation and deterministic rendering of backend diagnostics and reproduction commands |
 | `*_test.go` | Unit and regression coverage for each analysis stage |
@@ -46,7 +46,7 @@ Purity is inferred only when a function has no direct effect evidence, no effect
 
 - Stable function IDs key `Index.Functions` and adjacency maps.
 - `call` edges represent backend-reported local calls, including dynamic interface and function-value candidates and their precision metadata before translation to the unchanged public edge model.
-- `dependency` edges represent statically identifiable local function values passed or returned as dependencies.
+- `dependency` edges represent statically identifiable local function values passed or returned as dependencies, plus conservative dynamic JavaScript receiver-type relationships.
 - `Search` excludes anonymous functions and optionally tests.
 - `Focus` returns a deterministic bounded neighborhood with depth clamped to eight.
 - Changed-function review order traverses calls and dependencies through unchanged nodes, collapses recursive components, and ranks graph levels by distinct changed leaf descendants.

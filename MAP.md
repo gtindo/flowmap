@@ -11,7 +11,7 @@ Flowmap is a local code-reading workbench for Go and JavaScript/TypeScript repos
 The design follows a functional-core, imperative-shell boundary:
 
 - `internal/semantic/` defines the backend contract and language-neutral semantic facts.
-- `internal/backends/go/` owns Go toolchain, package loading, compiler, and call-graph effects; `internal/backends/javascript/` owns standalone JS/TS syntax analysis.
+- `internal/backends/go/` owns Go toolchain, package loading, compiler, and call-graph effects; `internal/backends/javascript/` owns standalone JS/TS syntax analysis, including class-owned callable extraction and conservative member-call resolution.
 - `internal/analyzer/` owns deterministic semantic enrichment, classification, graph assembly, Git attribution, and queries.
 - `cmd/flowmap/` owns command-line and process lifecycle effects.
 - `internal/server/` owns HTTP, subprocess summarization, cache, and browser integration effects.

@@ -144,6 +144,24 @@ func TestCaptureGitSnapshotHandlesUnbornAndNonGitDirectories(t *testing.T) {
 	}
 }
 
+func TestJavaScriptDeclarationNamesIncludeOwnerQualifiedMethods(t *testing.T) {
+	names := javascriptDeclarationNames(`
+export class Service {
+  constructor() {}
+  save() {}
+  static create() {}
+}
+
+export const helper = () => {};
+`)
+	got := strings.Join(names, ",")
+	for _, want := range []string{"Service.constructor", "Service.save", "Service.create", "helper"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("declaration names %q omitted %q", got, want)
+		}
+	}
+}
+
 func testFunctionsFromFiles(t *testing.T, root string, names ...string) map[string]Function {
 	t.Helper()
 	result := make(map[string]Function)

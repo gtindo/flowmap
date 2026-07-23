@@ -14,6 +14,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	javascriptbackend "github.com/gtindo/flowmap/internal/backends/javascript"
 )
 
 type functionSpan struct {
@@ -248,8 +250,6 @@ func baselineFunctionKeys(ctx context.Context, repositoryRoot string, pathspec s
 	return result
 }
 
-var javascriptDeclarationPattern = regexp.MustCompile(`(?m)(?:^|[;\n])\s*(?:export\s+)?(?:async\s+)?function\s+([A-Za-z_$][A-Za-z0-9_$]*)|(?:^|[;\n])\s*(?:export\s+)?(?:const|let|var)\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*(?:async\s*)?(?:\([^)]*\)|[A-Za-z_$][A-Za-z0-9_$]*)\s*=>`)
-
 func supportedJavaScriptPath(path string) bool {
 	switch strings.ToLower(filepath.Ext(path)) {
 	case ".js", ".mjs", ".cjs", ".jsx", ".ts", ".mts", ".cts", ".tsx":
@@ -260,18 +260,7 @@ func supportedJavaScriptPath(path string) bool {
 }
 
 func javascriptDeclarationNames(source string) []string {
-	matches := javascriptDeclarationPattern.FindAllStringSubmatch(source, -1)
-	names := make([]string, 0, len(matches))
-	for _, match := range matches {
-		if match[1] != "" {
-			names = append(names, match[1])
-			continue
-		}
-		if match[2] != "" {
-			names = append(names, match[2])
-		}
-	}
-	return names
+	return javascriptbackend.DeclarationNames(source)
 }
 
 func declarationKey(path string, packageName string, declaration *ast.FuncDecl) string {
