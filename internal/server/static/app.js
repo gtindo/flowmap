@@ -7,6 +7,7 @@ let graphGeneration = 0;
 let focusHistory = [];
 let focusHistoryIndex = -1;
 let currentGraph;
+let fullGraph;
 let currentPositions = new Map();
 let currentSize = { width: 255, height: 110 };
 let activeDrag;
@@ -42,6 +43,7 @@ let preferredDetailWidth = readDetailWidth();
 function projectStorageKey(key) { return key + ":" + (activeProject || "default") + ":" + (activeLanguage || "go"); }
 function detailWidthKey() { return projectStorageKey("flowmap-detail-width:v1"); }
 function reviewedFunctionsKey() { return projectStorageKey("flowmap-reviewed-functions:v1"); }
+function publicOnlyKey() { return projectStorageKey("flowmap-public-only:v1"); }
 
 function node(tag, cls, text) {
   const value = document.createElement(tag);
@@ -127,6 +129,14 @@ function readDetailWidth() {
   } catch (_) { return undefined; }
 }
 
+function readPublicOnlyPreference() {
+  try { return localStorage.getItem(publicOnlyKey()) === "true"; } catch (_) { return false; }
+}
+
+function savePublicOnlyPreference() {
+  try { localStorage.setItem(publicOnlyKey(), String($("public-only").checked)); } catch (_) {}
+}
+
 function clampDetailWidth(width) {
   const maximum = Math.max(0, window.innerWidth - detailViewportMargin);
   const minimum = Math.min(detailMinWidth, maximum);
@@ -210,7 +220,8 @@ $("tests").addEventListener("change", () => {
 $("direction").addEventListener("change", loadGraph);
 $("history-back").addEventListener("click", () => navigateHistory(-1));
 $("history-forward").addEventListener("click", () => navigateHistory(1));
-$("view").addEventListener("change", () => { if (currentGraph) render(currentGraph, true); });
+$("view").addEventListener("change", () => { if (fullGraph) render(fullGraph, true); });
+$("public-only").addEventListener("change", updatePublicOnlyGraph);
 $("reset-layout").addEventListener("click", resetLayout);
 $("zoom-in").addEventListener("click", () => zoomGraph(0.8));
 $("zoom-out").addEventListener("click", () => zoomGraph(1.25));
@@ -342,6 +353,7 @@ async function selectLanguage(language, knownLanguages) {
   setStatusIndicator(languageStatus, selected.status, "Language");
   try { localStorage.setItem(languagePreferenceKey + ":" + activeProject, language); } catch (_) {}
   if (changed) resetProjectView();
+  $("public-only").checked = readPublicOnlyPreference();
   preferredDetailWidth = readDetailWidth();
   applyDetailWidth(preferredDetailWidth);
   if (selected.status !== "ready") {
@@ -370,6 +382,7 @@ function resetProjectView() {
   searchGeneration++;
   rootID = "";
   currentGraph = undefined;
+  fullGraph = undefined;
   currentPositions = new Map();
   expansionRecords = new Map();
   expandedNodes = new Set();
@@ -511,6 +524,7 @@ function showEmptyAfterRescan() {
   graphGeneration++;
   rootID = "";
   currentGraph = undefined;
+  fullGraph = undefined;
   baseRootNode = undefined;
   expansionRecords = new Map();
   expandedNodes = new Set();
@@ -654,16 +668,35 @@ function pruneOrphanedExpansions() {
   }
 }
 
+function updatePublicOnlyGraph() {
+  savePublicOnlyPreference();
+  if (fullGraph) render(fullGraph, true);
+}
+
+function graphForDisplay(graph) {
+  if (!$("public-only").checked) return graph;
+  const publicNodes = graph.nodes.filter(item => item.id === graph.root || item.public);
+  const publicIDs = new Set(publicNodes.map(item => item.id));
+  return {
+    root: graph.root,
+    nodes: publicNodes,
+    edges: graph.edges.filter(edge => publicIDs.has(edge.caller_id) && publicIDs.has(edge.callee_id)),
+  };
+}
+
 function render(graph, resetViewport = false) {
-  currentGraph = graph;
+  fullGraph = graph;
+  currentGraph = graphForDisplay(graph);
+  if (activeDetailID && !currentGraph.nodes.some(item => item.id === activeDetailID)) hideDetail();
+
   const simple = $("view").value === "simple";
   $("reset-layout").classList.remove("hidden");
   currentSize = simple ? { width: 185, height: 48 } : { width: 255, height: 110 };
   const gaps = graphGaps();
   const direction = $("direction").value;
-  const levels = signedLevels(graph, direction);
+  const levels = signedLevels(currentGraph, direction);
   const buckets = new Map();
-  graph.nodes.forEach(item => { const level = levels.get(item.id); if (!buckets.has(level)) buckets.set(level, []); buckets.get(level).push(item); });
+  currentGraph.nodes.forEach(item => { const level = levels.get(item.id); if (!buckets.has(level)) buckets.set(level, []); buckets.get(level).push(item); });
   const wrap = $("canvas-wrap");
   const minimumLevel = Math.min(...levels.values());
   const rootX = Math.max(wrap.clientWidth / 2 - currentSize.width / 2, 40 - minimumLevel * gaps.x);
@@ -877,11 +910,12 @@ async function expandNode(id) {
   if (expandedNodes.has(id)) return;
   try {
     const expansion = await json(graphURL(id));
-    const existingNodes = new Set(currentGraph.nodes.map(item => item.id));
+    const existingNodes = new Set(fullGraph.nodes.map(item => item.id));
     const newItems = expansion.nodes.filter(item => !existingNodes.has(item.id));
     expansionRecords.set(id, expansion);
     expandedNodes.add(id);
-    currentGraph = composeGraph();
+    fullGraph = composeGraph();
+    currentGraph = graphForDisplay(fullGraph);
     const anchor = currentPositions.get(id) || { x: 40, y: 45 };
     const gaps = graphGaps();
     const saved = readSavedPositions();
@@ -914,7 +948,8 @@ function collapseNode(id) {
   expansionRecords.delete(id);
   expandedNodes.delete(id);
   pruneOrphanedExpansions();
-  currentGraph = composeGraph();
+  fullGraph = composeGraph();
+  currentGraph = graphForDisplay(fullGraph);
   if (activeDetailID && !currentGraph.nodes.some(item => item.id === activeDetailID)) hideDetail();
   const visible = new Set(currentGraph.nodes.map(item => item.id));
   for (const nodeID of currentPositions.keys()) if (!visible.has(nodeID)) currentPositions.delete(nodeID);
@@ -1056,7 +1091,7 @@ function applyViewport(preserveCenter = true) {
 }
 
 function layoutKey() {
-  return "flowmap-layout:v2:" + (activeProject || "default") + ":" + $("view").value + ":" + rootID + ":" + $("direction").value + ":" + $("tests").checked;
+  return "flowmap-layout:v2:" + (activeProject || "default") + ":" + $("view").value + ":" + rootID + ":" + $("direction").value + ":" + $("tests").checked + ":" + $("public-only").checked;
 }
 
 function readSavedPositions() {
@@ -1071,7 +1106,7 @@ function savePositions() {
 
 function resetLayout() {
   try { localStorage.removeItem(layoutKey()); } catch (_) {}
-  if (currentGraph) render(currentGraph, true);
+  if (fullGraph) render(fullGraph, true);
 }
 
 function hideDetail() {

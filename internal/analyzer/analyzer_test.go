@@ -63,7 +63,7 @@ func TestAnalyzeBuildsTypedFocusedGraph(t *testing.T) {
 		t.Fatalf("CallDependency classification = %#v", callDependency.Classification)
 	}
 	workerClosure := findAnonymousFunction(t, index, ".StartWorker$1")
-	if !strings.Contains(workerClosure.Source, "serverErrors <- startHTTPServer()") || workerClosure.Classification.Kind != classificationEdge {
+	if workerClosure.Public || !strings.Contains(workerClosure.Source, "serverErrors <- startHTTPServer()") || workerClosure.Classification.Kind != classificationEdge {
 		t.Fatalf("worker closure metadata = %#v", workerClosure)
 	}
 	assertEdge(t, index, startWorker.ID, workerClosure.ID, edgeKindCall)

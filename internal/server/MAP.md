@@ -57,7 +57,7 @@ The cache lives under the operating-system user cache directory, never in the an
 
 ## Browser Workbench
 
-The static application searches functions, fetches focused graph neighborhoods, displays contracts/source/Git deltas, and preserves local layout preferences. It consumes only the local API and is embedded into the Go binary with `embed.FS`.
+The static application searches functions, fetches focused graph neighborhoods, displays contracts/source/Git deltas, and preserves local layout preferences. Its per-project/language public-boundary toggle filters rendered upstream/downstream nodes and edges without changing the fetched graph or search results, while retaining the focused function. It consumes only the local API and is embedded into the Go binary with `embed.FS`.
 
 Changes under `static/` require the existing two-space indentation and before/after screenshots in pull requests when presentation changes.
 

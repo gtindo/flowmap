@@ -9,5 +9,6 @@ This package reads local JavaScript-family source files and produces a language-
 - It excludes dependency, generated, declaration, VCS, and common build-output paths.
 - Relative ESM namespaces and CommonJS aliases resolve only identified local exports. Local static methods plus `this` and analyzable `super` calls are direct calls. Receivers from local construction or explicit local class syntax become dynamic dependency edges; unknown, structural, generic, union, package, computed, and reflection-like receivers do not gain speculative graph edges.
 - Class ownership is represented in stable callable names (`Service.save`), not as a class-diagram graph. Inheritance is retained only for locally analyzable `super` lookup; this backend does not expand polymorphic overrides.
+- Public-boundary metadata marks ESM/CommonJS exports and local re-exports, plus public constructors and methods of exported classes; private/protected and unexported-class members remain internal.
 - Package imports, dynamic dispatch, path aliases, bundler configuration, and cross-language calls remain external and conservative for classification.
 - Source parsing is best-effort: healthy files continue to contribute symbols when a neighboring file cannot be read or parsed.

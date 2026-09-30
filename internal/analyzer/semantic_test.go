@@ -38,9 +38,9 @@ func TestBuildIndexPreservesSemanticIdentityRelationshipsAndJSON(t *testing.T) {
 			{
 				ID: "caller", Kind: semantic.SymbolFunction, Name: "Run", QualifiedName: "sample.Run", Package: "sample",
 				Location: semantic.Location{File: "/work/project/sample.go", Line: 10, EndLine: 14}, Source: "func Run() {}",
-				Documentation: "Run coordinates work.\n\nSide Effect (Edge): boundary.",
-				Signature:     semantic.Signature{Display: "func(input sample.Input) sample.Output", Parameters: []string{"input sample.Input"}, Results: []string{"sample.Output"}, Contracts: []semantic.Contract{{Name: "sample.Input", Kind: "struct", Fields: []semantic.Field{{Name: "Text", Type: "string"}}}}},
-				Facts:         []semantic.Fact{{Kind: semantic.FactExternalCall, Package: "os", Name: "ReadFile"}},
+				Documentation: "Run coordinates work.\n\nSide Effect (Edge): boundary.", Public: true,
+				Signature: semantic.Signature{Display: "func(input sample.Input) sample.Output", Parameters: []string{"input sample.Input"}, Results: []string{"sample.Output"}, Contracts: []semantic.Contract{{Name: "sample.Input", Kind: "struct", Fields: []semantic.Field{{Name: "Text", Type: "string"}}}}},
+				Facts:     []semantic.Fact{{Kind: semantic.FactExternalCall, Package: "os", Name: "ReadFile"}},
 			},
 			{ID: "callee", Kind: semantic.SymbolClosure, Name: "Run$1", QualifiedName: "sample.Run$1", Package: "sample", Signature: semantic.Signature{Display: "func()"}},
 		},
@@ -53,7 +53,7 @@ func TestBuildIndexPreservesSemanticIdentityRelationshipsAndJSON(t *testing.T) {
 
 	index := buildIndex(snapshot)
 	caller := index.Functions["caller"]
-	if caller.ID != "caller" || caller.Intent != "Run coordinates work." || caller.Classification.Kind != classificationEdge {
+	if caller.ID != "caller" || !caller.Public || caller.Intent != "Run coordinates work." || caller.Classification.Kind != classificationEdge {
 		t.Fatalf("caller enrichment = %#v", caller)
 	}
 	if !reflect.DeepEqual(caller.Contracts, []Contract{{Name: "sample.Input", Kind: "struct", Fields: []Field{{Name: "Text", Type: "string"}}}}) {

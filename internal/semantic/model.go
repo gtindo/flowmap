@@ -37,6 +37,7 @@ type Symbol struct {
 	Source        string
 	Signature     Signature
 	Documentation string
+	Public        bool
 	Test          bool
 	Facts         []Fact
 }

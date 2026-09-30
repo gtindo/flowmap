@@ -27,6 +27,7 @@ var (
 	classPattern          = regexp.MustCompile(`\b(?:export\s+(?:default\s+)?)?class\s+([A-Za-z_$][A-Za-z0-9_$]*)(?:\s+extends\s+([A-Za-z_$][A-Za-z0-9_$]*))?[^\{]*\{`)
 	classExpression       = regexp.MustCompile(`\b(?:export\s+)?(?:const|let|var)\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*(?::[^=;]+)?=\s*class(?:\s+[A-Za-z_$][A-Za-z0-9_$]*)?(?:\s+extends\s+([A-Za-z_$][A-Za-z0-9_$]*))?[^\{]*\{`)
 	methodPattern         = regexp.MustCompile(`(?m)(?:^|[;{}])\s*(?:(?:public|private|protected|readonly|abstract|declare|override)\s+)*(?:(static)\s+)?(?:(async)\s+)?(?:(get|set)\s+)?(\*?)\s*(constructor|[A-Za-z_$][A-Za-z0-9_$]*)\s*\(([^)]*)\)\s*(?::\s*[^\{=]+)?\s*\{`)
+	accessModifierPattern = regexp.MustCompile(`\b(private|protected|public)\b`)
 	directCallPattern     = regexp.MustCompile(`\b([A-Za-z_$][A-Za-z0-9_$]*)\s*\(`)
 	memberCallPattern     = regexp.MustCompile(`\b((?:this|super|[A-Za-z_$][A-Za-z0-9_$]*)(?:\.[A-Za-z_$][A-Za-z0-9_$]*)*)\.([A-Za-z_$][A-Za-z0-9_$]*)\s*\(`)
 	importPattern         = regexp.MustCompile(`(?m)^\s*import\s+(.+?)\s+from\s+["']([^"']+)["']`)
@@ -93,6 +94,7 @@ type symbolRecord struct {
 
 	class      *classInfo
 	memberName string
+	access     string
 	static     bool
 	returnType string
 	exported   bool
@@ -129,6 +131,7 @@ func (Backend) Analyze(ctx context.Context, request semantic.AnalysisRequest) (s
 	}
 
 	linkModules(files, byFile)
+	markPublicCallables(records, files)
 	relationships := collectRelationships(records)
 	symbols := make([]semantic.Symbol, 0, len(records))
 	for _, record := range records {
@@ -338,6 +341,7 @@ func extractMethods(file *sourceFile, class *classInfo, masked string) []*symbol
 			memberName = "constructor"
 		}
 		record := addRecord(file, class, class.name+"."+memberName, memberName, parameters, start, brace, "", match[2] >= 0, true)
+		record.access = methodAccess(file.src[start:brace])
 		records = append(records, record)
 		if match[2] >= 0 {
 			class.statics[memberName] = record
@@ -347,6 +351,36 @@ func extractMethods(file *sourceFile, class *classInfo, masked string) []*symbol
 	}
 	extractClassFields(class, body)
 	return records
+}
+
+func markPublicCallables(records []*symbolRecord, files []*sourceFile) {
+	exportedClasses := make(map[*classInfo]bool)
+	for _, file := range files {
+		for _, record := range file.exportFunctions {
+			record.symbol.Public = true
+		}
+		for _, class := range file.exportClasses {
+			exportedClasses[class] = true
+		}
+	}
+
+	for _, record := range records {
+		if record.class == nil {
+			record.symbol.Public = record.symbol.Public || record.exported
+			continue
+		}
+		if exportedClasses[record.class] && record.access != "private" && record.access != "protected" {
+			record.symbol.Public = true
+		}
+	}
+}
+
+func methodAccess(declaration string) string {
+	match := accessModifierPattern.FindStringSubmatch(declaration)
+	if len(match) == 2 {
+		return match[1]
+	}
+	return "public"
 }
 
 func extractClassFields(class *classInfo, body string) {

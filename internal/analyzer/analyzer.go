@@ -92,7 +92,7 @@ func buildIndex(snapshot semantic.Snapshot) *Index {
 				Contracts:  contractsFromSemantic(symbol.Signature.Contracts),
 				Intent:     firstParagraph(symbol.Documentation), IntentSource: intentSource(symbol.Documentation),
 				File: symbol.Location.File, Line: symbol.Location.Line, EndLine: symbol.Location.EndLine,
-				Source: symbol.Source, Test: symbol.Test, Anonymous: symbol.Kind == semantic.SymbolClosure,
+				Source: symbol.Source, Public: symbol.Public, Test: symbol.Test, Anonymous: symbol.Kind == semantic.SymbolClosure,
 				Classification: classification,
 			},
 		}

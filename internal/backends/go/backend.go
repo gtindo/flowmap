@@ -177,7 +177,8 @@ func collectSymbols(root string, program *ssa.Program, ssaPackages []*ssa.Packag
 					Display: readableType(signature), Parameters: tupleStrings(signature.Params(), signature.Variadic()),
 					Results: tupleStrings(signature.Results(), false), Contracts: signatureContracts(signature),
 				},
-				Test: isTestFunction, Facts: collectFacts(functionBody(syntax), loadedPackage.TypesInfo),
+				Public: isDeclaration && ast.IsExported(declaration.Name.Name),
+				Test:   isTestFunction, Facts: collectFacts(functionBody(syntax), loadedPackage.TypesInfo),
 			},
 		}
 	}

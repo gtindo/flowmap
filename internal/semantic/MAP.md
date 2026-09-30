@@ -8,7 +8,7 @@ This package is the language-neutral boundary between repository analysis backen
 
 - `AnalysisRequest` carries the repository root, selected language, and Go build-tag input.
 - `Snapshot` contains the selected language, callable symbols, relationships, and backend diagnostics.
-- `Symbol` carries a stable ID, kind, names, package/namespace, source location and text, documentation, signature, contracts, test metadata, and backend facts.
+- `Symbol` carries a stable ID, kind, names, package/namespace, source location and text, documentation, public-boundary metadata, signature, contracts, test metadata, and backend facts.
 - `Relationship` carries call or dependency endpoints plus source location, provenance, precision, and dynamic-dispatch metadata.
 - `Fact` records semantic evidence that Flowmap classification interprets downstream.
 

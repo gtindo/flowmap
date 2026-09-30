@@ -45,6 +45,7 @@ type Function struct {
 	Line           int             `json:"line"`
 	EndLine        int             `json:"end_line"`
 	Source         string          `json:"source,omitempty"`
+	Public         bool            `json:"public"`
 	Test           bool            `json:"test"`
 	Anonymous      bool            `json:"anonymous,omitempty"`
 	Classification Classification  `json:"classification"`

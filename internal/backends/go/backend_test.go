@@ -23,12 +23,17 @@ func TestBackendPreservesStableIDsAndExactRelationships(t *testing.T) {
 
 	run := findSymbol(t, snapshot.Symbols, "sample.Run")
 	normalize := findSymbol(t, snapshot.Symbols, "sample.Normalize")
+	callbackHandle := findSymbol(t, snapshot.Symbols, "sample.(sample.CallbackOwner).Handle")
+	internal := findSymbol(t, snapshot.Symbols, "sample.startHTTPServer")
 	wantRunID := expectedID("example.com/sample|sample.Run|" + filepath.Join(root, "sample.go") + ":35")
 	if run.ID != wantRunID {
 		t.Fatalf("Run ID = %q, want %q", run.ID, wantRunID)
 	}
 	if run.Signature.Display != "func(ctx context.Context, store sample.Store, input sample.Input) (sample.Output, error)" || len(run.Signature.Contracts) != 5 {
 		t.Fatalf("Run signature = %#v", run.Signature)
+	}
+	if !run.Public || !callbackHandle.Public || internal.Public {
+		t.Fatalf("public visibility = Run:%t Handle:%t startHTTPServer:%t", run.Public, callbackHandle.Public, internal.Public)
 	}
 
 	wantSite := filepath.Join(root, "sample.go") + ":36"

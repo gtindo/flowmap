@@ -125,6 +125,44 @@ class StaticCaller {
 	assertNoRelationshipFrom(t, snapshot, byName["computed"].ID)
 }
 
+func TestBackendMarksPublicCallables(t *testing.T) {
+	root := t.TempDir()
+	writeJavaScriptFixture(t, root, "api.ts", `export function direct() {}
+function common() {}
+module.exports = { common };
+
+export class Service {
+  constructor() {}
+  public run() {}
+  protected extend() {}
+  private secret() {}
+  static create() {}
+}
+
+class Hidden {
+  run() {}
+}
+`)
+	writeJavaScriptFixture(t, root, "barrel.ts", `export { direct as reexported } from "./api";`)
+
+	snapshot, err := (Backend{}).Analyze(context.Background(), semantic.AnalysisRequest{Root: root, Language: "javascript"})
+	if err != nil {
+		t.Fatalf("Analyze() error = %v", err)
+	}
+
+	byName := symbolsByName(snapshot)
+	for _, name := range []string{"direct", "common", "Service.constructor", "Service.run", "Service.create"} {
+		if symbol := byName[name]; symbol == nil || !symbol.Public {
+			t.Errorf("%s public = %#v, want true", name, symbol)
+		}
+	}
+	for _, name := range []string{"Service.extend", "Service.secret", "Hidden.run"} {
+		if symbol := byName[name]; symbol == nil || symbol.Public {
+			t.Errorf("%s public = %#v, want false", name, symbol)
+		}
+	}
+}
+
 func writeJavaScriptFixture(t *testing.T, root, name, source string) {
 	t.Helper()
 	if err := os.WriteFile(filepath.Join(root, name), []byte(source), 0o600); err != nil {
