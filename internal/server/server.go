@@ -80,21 +80,18 @@ type RescanResult struct {
 }
 
 type project struct {
-	name      string
-	root      string
-	languages map[string]*languageProject
-	list      []string
+	name        string
+	root        string
+	workspaceID string
+	languages   map[string]*languageProject
+	list        []string
 }
 
-// languageProject mirrors one engine language view. Mutable fields are
-// guarded by App.mu and updated from engine notifications.
+// languageProject identifies one engine language view. View state is never
+// cached here; it is read from the engine with workspace/get.
 type languageProject struct {
 	language string
 	viewID   string
-
-	status   string
-	err      string
-	snapshot protocol.Snapshot
 }
 
 // analysisOutcome is the terminal notification for one analysis.
@@ -111,7 +108,6 @@ type App struct {
 	projectList []string
 
 	mu        sync.Mutex
-	views     map[string]*languageProject
 	waiters   map[string]chan analysisOutcome
 	finished  map[string]analysisOutcome
 	abandoned map[string]bool
@@ -132,7 +128,6 @@ func New(ctx context.Context, client *protocol.Client, configs []ProjectConfig) 
 		client:    client,
 		summaries: client.Session().Capabilities.SymbolSummary,
 		projects:  make(map[string]*project, len(configs)),
-		views:     make(map[string]*languageProject),
 		waiters:   make(map[string]chan analysisOutcome),
 		finished:  make(map[string]analysisOutcome),
 		abandoned: make(map[string]bool),
@@ -182,15 +177,10 @@ func (app *App) openProject(ctx context.Context, config ProjectConfig) (*project
 		return nil, fmt.Errorf("open project %q: %w", name, err)
 	}
 
-	entry := &project{name: name, root: root, languages: make(map[string]*languageProject, len(opened.Views))}
-	app.mu.Lock()
-	defer app.mu.Unlock()
-
+	entry := &project{name: name, root: root, workspaceID: opened.WorkspaceID, languages: make(map[string]*languageProject, len(opened.Views))}
 	for _, openedView := range opened.Views {
-		languageEntry := &languageProject{language: openedView.Language, viewID: openedView.ViewID, status: statusUnscanned}
-		entry.languages[openedView.Language] = languageEntry
+		entry.languages[openedView.Language] = &languageProject{language: openedView.Language, viewID: openedView.ViewID}
 		entry.list = append(entry.list, openedView.Language)
-		app.views[openedView.ViewID] = languageEntry
 	}
 	sort.Strings(entry.list)
 	return entry, nil
@@ -265,10 +255,15 @@ func (recorder *statusRecorder) WriteHeader(status int) {
 	recorder.ResponseWriter.WriteHeader(status)
 }
 
-func (app *App) handleProjects(response http.ResponseWriter, _ *http.Request) {
+func (app *App) handleProjects(response http.ResponseWriter, request *http.Request) {
 	result := make([]ProjectStatus, 0, len(app.projectList))
 	for _, name := range app.projectList {
-		result = append(result, app.projectStatus(app.projects[name]))
+		status, err := app.projectStatus(request.Context(), app.projects[name])
+		if err != nil {
+			writeError(response, httpStatus(err), err)
+			return
+		}
+		result = append(result, status)
 	}
 	writeJSON(response, http.StatusOK, result)
 }
@@ -311,10 +306,6 @@ func (app *App) Scan(ctx context.Context, name string, language string) (RescanR
 		}
 		return RescanResult{}, fmt.Errorf("scan project: %w", err)
 	}
-
-	app.mu.Lock()
-	languageEntry.status, languageEntry.err = statusLoading, ""
-	app.mu.Unlock()
 
 	outcome, err := app.awaitAnalysis(ctx, analysisID)
 	if err != nil {
@@ -366,8 +357,8 @@ func (app *App) awaitAnalysis(ctx context.Context, analysisID string) (analysisO
 	}
 }
 
-// handleNotification mirrors engine view state and wakes scan waiters. It
-// runs on the client read loop, so it only updates local state.
+// handleNotification wakes scan waiters. It runs on the client read loop, so
+// it only updates local state.
 func (app *App) handleNotification(method string, params json.RawMessage) {
 	switch method {
 	case protocol.MethodAnalysisPublished:
@@ -375,27 +366,19 @@ func (app *App) handleNotification(method string, params json.RawMessage) {
 		if json.Unmarshal(params, &published) != nil {
 			return
 		}
-		app.recordOutcome(published.AnalysisID, published.ViewID, analysisOutcome{published: &published.Snapshot})
+		app.recordOutcome(published.AnalysisID, analysisOutcome{published: &published.Snapshot})
 	case protocol.MethodAnalysisFailed:
 		var failed protocol.AnalysisFailure
 		if json.Unmarshal(params, &failed) != nil {
 			return
 		}
-		app.recordOutcome(failed.AnalysisID, failed.ViewID, analysisOutcome{failure: &failed.Failure})
+		app.recordOutcome(failed.AnalysisID, analysisOutcome{failure: &failed.Failure})
 	}
 }
 
-func (app *App) recordOutcome(analysisID string, viewID string, outcome analysisOutcome) {
+func (app *App) recordOutcome(analysisID string, outcome analysisOutcome) {
 	app.mu.Lock()
 	defer app.mu.Unlock()
-
-	if languageEntry := app.views[viewID]; languageEntry != nil {
-		if outcome.published != nil {
-			languageEntry.status, languageEntry.err, languageEntry.snapshot = statusReady, "", *outcome.published
-		} else {
-			languageEntry.status, languageEntry.err = statusFailed, outcome.failure.Message
-		}
-	}
 
 	if app.abandoned[analysisID] {
 		delete(app.abandoned, analysisID)
@@ -409,21 +392,37 @@ func (app *App) recordOutcome(analysisID string, viewID string, outcome analysis
 	app.finished[analysisID] = outcome
 }
 
-// language resolves a project view that has a published snapshot.
-func (app *App) language(name string, language string) (*project, protocol.SnapshotQuery, error) {
+// language resolves a project view to the engine's current snapshot.
+func (app *App) language(ctx context.Context, name string, language string) (*project, protocol.SnapshotQuery, error) {
 	entry, languageEntry, err := app.languageEntry(name, language)
 	if err != nil {
 		return nil, protocol.SnapshotQuery{}, err
 	}
 
-	app.mu.Lock()
-	snapshotID := languageEntry.snapshot.SnapshotID
-	app.mu.Unlock()
+	states, err := app.viewStates(ctx, entry)
+	if err != nil {
+		return nil, protocol.SnapshotQuery{}, err
+	}
 
-	if snapshotID == "" {
+	current := states[languageEntry.viewID].CurrentSnapshot
+	if current == nil {
 		return nil, protocol.SnapshotQuery{}, fmt.Errorf("project %q language %q has not been scanned: %w", entry.name, languageEntry.language, errNotFound)
 	}
-	return entry, protocol.SnapshotQuery{ViewID: languageEntry.viewID, SnapshotID: snapshotID}, nil
+	return entry, protocol.SnapshotQuery{ViewID: languageEntry.viewID, SnapshotID: current.SnapshotID}, nil
+}
+
+// viewStates reads every view's load state from the engine.
+func (app *App) viewStates(ctx context.Context, entry *project) (map[string]protocol.LoadState, error) {
+	opened, err := app.client.GetWorkspace(ctx, entry.workspaceID)
+	if err != nil {
+		return nil, fmt.Errorf("read project %q state: %w", entry.name, err)
+	}
+
+	states := make(map[string]protocol.LoadState, len(opened.Views))
+	for _, view := range opened.Views {
+		states[view.ViewID] = view.LoadState
+	}
+	return states, nil
 }
 
 func (app *App) languageEntry(name string, language string) (*project, *languageProject, error) {
@@ -451,14 +450,15 @@ func configLanguage(config analyzer.Config) string {
 	return strings.ToLower(strings.TrimSpace(config.Language))
 }
 
-func (app *App) projectStatus(entry *project) ProjectStatus {
-	app.mu.Lock()
-	defer app.mu.Unlock()
+func (app *App) projectStatus(ctx context.Context, entry *project) (ProjectStatus, error) {
+	states, err := app.viewStates(ctx, entry)
+	if err != nil {
+		return ProjectStatus{}, err
+	}
 
 	result := ProjectStatus{Name: entry.name, Status: statusReady}
 	for _, language := range entry.list {
-		languageEntry := entry.languages[language]
-		status := LanguageStatus{Language: language, Status: languageEntry.status, Error: languageEntry.err, FunctionCount: languageEntry.snapshot.SymbolCount}
+		status := languageStatus(language, states[entry.languages[language].viewID])
 		result.Languages = append(result.Languages, status)
 		if status.Status != statusReady {
 			result.Status = status.Status
@@ -466,13 +466,35 @@ func (app *App) projectStatus(entry *project) ProjectStatus {
 		}
 		result.FunctionCount += status.FunctionCount
 	}
-	return result
+	return result, nil
+}
+
+// languageStatus maps an engine load state onto the browser's status model.
+// Operations (Pure): data mapping only.
+func languageStatus(language string, state protocol.LoadState) LanguageStatus {
+	status := LanguageStatus{Language: language, Status: statusUnscanned}
+	switch state.State {
+	case protocol.LoadStateAnalyzing:
+		status.Status = statusLoading
+	case protocol.LoadStateReady:
+		status.Status = statusReady
+	case protocol.LoadStateFailed:
+		status.Status = statusFailed
+	}
+
+	if state.CurrentSnapshot != nil {
+		status.FunctionCount = state.CurrentSnapshot.SymbolCount
+	}
+	if state.Failure != nil {
+		status.Error = state.Failure.Message
+	}
+	return status
 }
 
 func (app *App) handleGitStatus(response http.ResponseWriter, request *http.Request) {
-	_, query, err := app.language(request.URL.Query().Get("project"), request.URL.Query().Get("language"))
+	_, query, err := app.language(request.Context(), request.URL.Query().Get("project"), request.URL.Query().Get("language"))
 	if err != nil {
-		writeError(response, http.StatusNotFound, err)
+		writeError(response, httpStatus(err), err)
 		return
 	}
 
@@ -485,9 +507,9 @@ func (app *App) handleGitStatus(response http.ResponseWriter, request *http.Requ
 }
 
 func (app *App) handleSearch(response http.ResponseWriter, request *http.Request) {
-	_, query, err := app.language(request.URL.Query().Get("project"), request.URL.Query().Get("language"))
+	_, query, err := app.language(request.Context(), request.URL.Query().Get("project"), request.URL.Query().Get("language"))
 	if err != nil {
-		writeError(response, http.StatusNotFound, err)
+		writeError(response, httpStatus(err), err)
 		return
 	}
 
@@ -505,9 +527,9 @@ func (app *App) handleSearch(response http.ResponseWriter, request *http.Request
 }
 
 func (app *App) handleGraph(response http.ResponseWriter, request *http.Request) {
-	entry, query, err := app.language(request.URL.Query().Get("project"), request.URL.Query().Get("language"))
+	entry, query, err := app.language(request.Context(), request.URL.Query().Get("project"), request.URL.Query().Get("language"))
 	if err != nil {
-		writeError(response, http.StatusNotFound, err)
+		writeError(response, httpStatus(err), err)
 		return
 	}
 
@@ -534,9 +556,9 @@ func (app *App) handleGraph(response http.ResponseWriter, request *http.Request)
 }
 
 func (app *App) handleFunction(response http.ResponseWriter, request *http.Request) {
-	_, query, err := app.language(request.URL.Query().Get("project"), request.URL.Query().Get("language"))
+	_, query, err := app.language(request.Context(), request.URL.Query().Get("project"), request.URL.Query().Get("language"))
 	if err != nil {
-		writeError(response, http.StatusNotFound, err)
+		writeError(response, httpStatus(err), err)
 		return
 	}
 
@@ -557,9 +579,9 @@ func (app *App) handleSummary(response http.ResponseWriter, request *http.Reques
 		writeError(response, http.StatusNotImplemented, errSummaryDisabled)
 		return
 	}
-	_, query, err := app.language(request.URL.Query().Get("project"), request.URL.Query().Get("language"))
+	_, query, err := app.language(request.Context(), request.URL.Query().Get("project"), request.URL.Query().Get("language"))
 	if err != nil {
-		writeError(response, http.StatusNotFound, err)
+		writeError(response, httpStatus(err), err)
 		return
 	}
 

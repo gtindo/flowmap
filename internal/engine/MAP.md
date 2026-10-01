@@ -22,6 +22,7 @@ This package implements one Flowmap engine protocol session. It owns session lif
 Serve
   -> initialize (read loop, exactly once)
   -> workspace/open: validate file: root and view specs, issue opaque ids
+  -> workspace/get: current load state (analysisId, currentSnapshot, failure) per view
   -> analysis/start: register active analysis, respond, then launch goroutine
        -> analysis/progress
        -> Options.Analyze (default analyzer.Analyze)
@@ -35,7 +36,7 @@ Serve
 ## Boundaries and Invariants
 
 - One active analysis per view; cancellation and publication are ordered by the session lock.
-- A failed or cancelled analysis never replaces the current snapshot.
+- A failed or cancelled analysis never replaces the current snapshot. A load or internal failure marks the view `failed` until the next publication; a cancellation leaves the view's state unchanged.
 - Each view retains its current snapshot and immediate predecessor; older snapshots return `SnapshotUnavailable`.
 - A per-view emit lock keeps each view's notifications in commit order, and the `analysis/start` response is written before its notifications.
 - Standard output is protocol-only; operator diagnostics go to `Options.Logger`.

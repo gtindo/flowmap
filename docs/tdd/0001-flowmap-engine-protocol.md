@@ -215,6 +215,12 @@ Opening a workspace does not start analysis. The result is a `Workspace` whose
 views begin in `unscanned` state. Opening the same URI more than once is allowed
 and produces independent workspace and view identifiers.
 
+`workspace/get` takes a `workspaceId` and returns the same `Workspace` model with
+each view's current `loadState`. Notifications remain the primary way to follow
+analysis, but a client that starts late, reloads, or misses a notification can
+resynchronize from `workspace/get` alone. An unknown or closed workspace is
+`WorkspaceNotFound`.
+
 `workspace/close` takes a `workspaceId`, requests cancellation of its active
 analyses, invalidates its views and snapshots, and returns `null`. It is an
 error to query or start analysis in a closed workspace.
@@ -292,6 +298,7 @@ Failures do not invalidate the view's previously published snapshot.
 | `shutdown` | request | none | `null` |
 | `exit` | notification | none | none |
 | `workspace/open` | request | root and view specs | `Workspace` |
+| `workspace/get` | request | `workspaceId` | `Workspace` with current load states |
 | `workspace/close` | request | `workspaceId` | `null` |
 | `analysis/start` | request | view and optional hint | `analysisId` |
 | `analysis/cancel` | request | `analysisId` | cancellation acknowledgement |
@@ -379,11 +386,21 @@ parse, construct, or persist meaning from their contents.
 | `Workspace` | `workspaceId`, `rootUri`, optional `name`, `views` |
 | `LanguageView` | `viewId`, `workspaceId`, `language`, `loadState` |
 | `Snapshot` | `snapshotId`, `viewId`, `revision`, `symbolCount`, `edgeCount` |
-| `LoadState` | `state`; optional `analysisId`, `currentSnapshotId` |
+| `LoadState` | `state`; optional `analysisId`, `currentSnapshot`, `failure` |
 
-`LoadState.state` is `unscanned`, `analyzing`, `ready`, or `failed`.
-`currentSnapshotId` identifies the most recently published and still current
-snapshot, including while another analysis is running or after one fails.
+`LoadState.state` is `unscanned`, `analyzing`, `ready`, or `failed`:
+
+- `analyzing` while an analysis is active; `analysisId` identifies it.
+- `failed` when the most recent completed analysis failed with `loadFailed` or
+  `internal`; `failure` carries that `Failure`.
+- `ready` when a snapshot is current and the most recent completed analysis
+  published it.
+- `unscanned` when no snapshot has been published and no analysis has failed.
+
+`currentSnapshot` is the `Snapshot` descriptor of the most recently published
+and still current snapshot, including while another analysis is running or
+after one fails. A cancelled analysis does not change the state it replaced:
+cancellation is a client decision, not a property of the source.
 
 ### Locations and symbols
 
@@ -821,7 +838,9 @@ workbench request crosses the same `Content-Length` framing and JSON-RPC
 messages that a stdio client uses. Each configured project is opened as one
 workspace, its languages as views, and HTTP scans become `analysis/start`
 followed by waiting for `analysis/published` or `analysis/failed`. The engine's
-one-analysis-per-view rule surfaces as HTTP `409 Conflict`.
+one-analysis-per-view rule surfaces as HTTP `409 Conflict`. The adapter caches no
+view state: project status and the snapshot each query addresses come from
+`workspace/get`.
 
 The HTTP API retains its snake_case, path-based JSON for compatibility; the
 adapter translates protocol camelCase models and URI-based locations back into
@@ -858,10 +877,17 @@ version identifier.
 An incompatible experimental revision must use a different exact version
 identifier; the identifier for this document remains `"0"`.
 
-Revisions within version `0` so far are additive only: `public` on
-`SymbolSummary` and `Symbol`, and the optional `Symbol.change`, were added when
-the reference workbench moved onto the protocol, because its public-boundary
-filter and per-node Git diffs depend on them. A future version
+Revisions within version `0` made while implementing the reference workbench,
+before any external client existed:
+
+- `public` on `SymbolSummary` and `Symbol`, and the optional `Symbol.change`,
+  because the workbench's public-boundary filter and per-node Git diffs depend
+  on them.
+- `workspace/get`, so clients can recover view state without replaying
+  notifications.
+- `LoadState.currentSnapshotId` was replaced by the full `currentSnapshot`
+  descriptor, and `LoadState.failure` was added, so a resynchronizing client
+  learns revision, counts, and failure reasons in one request. A future version
 `1` must define its own compatibility policy, deprecation rules, and any
 additional transports. Version `1` stability must not be inferred from this
 document.

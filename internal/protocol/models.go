@@ -12,6 +12,7 @@ const (
 	MethodShutdown          = "shutdown"
 	MethodExit              = "exit"
 	MethodWorkspaceOpen     = "workspace/open"
+	MethodWorkspaceGet      = "workspace/get"
 	MethodWorkspaceClose    = "workspace/close"
 	MethodAnalysisStart     = "analysis/start"
 	MethodAnalysisCancel    = "analysis/cancel"
@@ -103,6 +104,11 @@ type WorkspaceOpenParams struct {
 	Views   []ViewSpec `json:"views"`
 }
 
+// WorkspaceGetParams identifies the workspace to describe.
+type WorkspaceGetParams struct {
+	WorkspaceID string `json:"workspaceId"`
+}
+
 // WorkspaceCloseParams identifies the workspace to close.
 type WorkspaceCloseParams struct {
 	WorkspaceID string `json:"workspaceId"`
@@ -124,11 +130,14 @@ type LanguageView struct {
 	LoadState   LoadState `json:"loadState"`
 }
 
-// LoadState reports a view's analysis lifecycle.
+// LoadState reports a view's analysis lifecycle. CurrentSnapshot survives
+// later failures and in-progress analyses; Failure describes the most recent
+// failed analysis while State is failed.
 type LoadState struct {
-	State             string `json:"state"`
-	AnalysisID        string `json:"analysisId,omitempty"`
-	CurrentSnapshotID string `json:"currentSnapshotId,omitempty"`
+	State           string    `json:"state"`
+	AnalysisID      string    `json:"analysisId,omitempty"`
+	CurrentSnapshot *Snapshot `json:"currentSnapshot,omitempty"`
+	Failure         *Failure  `json:"failure,omitempty"`
 }
 
 // IncrementalHint is a correctness-neutral optimization hint.
