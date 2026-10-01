@@ -1,9 +1,11 @@
 # TDD 0001: Flowmap Engine Protocol
 
-- Status: Experimental
+- Status: Experimental, implemented
 - Protocol version: `0`
 - Transport: JSON-RPC 2.0 over standard input and standard output
 - Reference client: Flowmap's embedded web workbench
+- Implementation: `internal/protocol/` (wire models, framing, Go client),
+  `internal/engine/` (session), and `flowmap engine` (stdio process)
 
 ## Summary
 
@@ -85,6 +87,7 @@ client presentation and IDE behavior
        Flowmap protocol
               |
 engine session, workspace registry, analysis scheduling, snapshot cache
+(internal/engine; wire models and client in internal/protocol)
               |
 internal/analyzer: enrichment, classification, Git attribution, queries
               |
@@ -110,8 +113,9 @@ language-neutral backend facts,
 [`internal/analyzer/MAP.md`](../../internal/analyzer/MAP.md) builds immutable
 indexes and serves deterministic queries, and
 [`internal/server/MAP.md`](../../internal/server/MAP.md) owns the reference HTTP
-and browser edge. The proposed protocol does not change those current runtime
-responsibilities by itself.
+and browser edge. `internal/engine/` owns the protocol session, and
+`internal/server/` is now a protocol client rather than an owner of analysis
+indexes.
 
 ## Transport and framing
 
@@ -273,7 +277,9 @@ Failures do not invalidate the view's previously published snapshot.
 - `revision` starts at 1 and increases by one for each successful publication
   in a view. It is informational; `snapshotId` remains the query identity.
 - After a newer snapshot is published, the engine may evict any superseded
-  snapshot. Queries for an evicted snapshot return `SnapshotUnavailable`.
+  snapshot. Queries for an evicted snapshot return `SnapshotUnavailable`. The
+  current implementation retains the current snapshot and its immediate
+  predecessor so queries issued just before a publication can complete.
 - Closing a workspace evicts all of its snapshots.
 - Snapshot identifiers and revisions are scoped to the engine process and are
   not valid after restart.
@@ -313,10 +319,10 @@ over qualified name and namespace. Anonymous symbols are excluded.
 `symbol/get` returns one full symbol. An unknown symbol in an available
 snapshot returns `SymbolNotFound`.
 
-`graph/neighborhood` accepts `rootSymbolId`, `direction` (`upstream`,
-`downstream`, or `both`), `depth` from 0 through 8, and `includeTests` (default
-`false`). Invalid directions and depths are `Invalid params` rather than being
-silently coerced.
+`graph/neighborhood` accepts `rootSymbolId`, a required `direction`
+(`upstream`, `downstream`, or `both`), a required `depth` from 0 through 8, and
+`includeTests` (default `false`). Missing or invalid directions and depths are
+`Invalid params` rather than being silently coerced.
 
 `changes/list` returns the Git state captured with the snapshot and its changed
 symbols in engine-defined review order. `diagnostics/list` returns the load
@@ -388,8 +394,9 @@ path field appears on the wire.
 
 | Model | Fields |
 |---|---|
-| `SymbolSummary` | `symbolId`, `name`, `qualifiedName`, `namespace`, `language`, `signature`, `classification`, `test` |
-| `Symbol` | all summary identity fields plus `kind`, `location`, `parameters`, `results`, `contracts`, `intent`, `intentSource`, `source`, `anonymous`, and `classificationDetail` |
+| `SymbolSummary` | `symbolId`, `name`, `qualifiedName`, `namespace`, `language`, `signature`, `classification`, `public`, `test` |
+| `Symbol` | all summary identity fields plus `kind`, `location`, `parameters`, `results`, `contracts`, `intent`, `intentSource`, `source`, `anonymous`, `classificationDetail`, and optional `change` |
+| `SymbolChange` | `kind`, `diff` |
 | `Classification` | `kind`, `provenance`, `evidence` |
 | `Contract` | `name`, `kind`, `fields`, `methods` |
 | `ContractField` | `name`, `type` |
@@ -400,7 +407,12 @@ path field appears on the wire.
 `classificationDetail` contains the full `Classification` in `Symbol`.
 `parameters`, `results`, `evidence`, `fields`, and `methods` are arrays of
 strings or their named model. `intent`, `intentSource`, and `source` may be
-omitted when unavailable. `test` and `anonymous` are booleans.
+omitted when unavailable. `public`, `test`, and `anonymous` are booleans;
+`public` marks a symbol on the package or module's public boundary (exported
+Go identifiers, exported JavaScript declarations and their public members).
+`change` is present only when the snapshot's captured Git state attributes a
+local difference to the symbol; its `kind` uses the same extensible values as
+`GitChange.kind` and its `diff` is the symbol-scoped unified diff.
 
 ### Graph models
 
@@ -687,6 +699,7 @@ Engine response:
         "language": "go",
         "signature": "func Analyze(context.Context, Config) (*Index, error)",
         "classification": "effect",
+        "public": true,
         "test": false
       }
     ]
@@ -740,6 +753,7 @@ Engine response:
         "results": ["*Index", "error"],
         "contracts": [],
         "source": "func Analyze(ctx context.Context, config Config) (*Index, error) { ... }",
+        "public": true,
         "test": false,
         "anonymous": false,
         "classification": "effect",
@@ -765,6 +779,7 @@ Engine response:
         "parameters": ["[]Function"],
         "results": ["[]Function"],
         "contracts": [],
+        "public": false,
         "test": false,
         "anonymous": false,
         "classification": "pure",
@@ -799,21 +814,24 @@ outstanding.
 
 ### Reference HTTP server and web workbench
 
-The existing `internal/server/` package is the reference integration. Its
-project registry maps to protocol workspaces, each per-language atomic index
-maps to a language view's current snapshot, and its rescan mutex maps to the
-one-analysis-per-view rule. Existing search, graph, function, Git-status, load
-diagnostic, and summary handlers can act as an HTTP adapter over engine
-operations. The embedded web workbench remains a presentation client of that
-adapter and is the reference for useful behavior, not for protocol wire shape.
+`internal/server/` is the reference integration and a protocol client.
+`flowmap serve` starts an engine session in the same process
+(`engine.StartInProcess`) and connects to it through in-memory pipes, so every
+workbench request crosses the same `Content-Length` framing and JSON-RPC
+messages that a stdio client uses. Each configured project is opened as one
+workspace, its languages as views, and HTTP scans become `analysis/start`
+followed by waiting for `analysis/published` or `analysis/failed`. The engine's
+one-analysis-per-view rule surfaces as HTTP `409 Conflict`.
 
-The current HTTP API may retain its snake_case JSON for compatibility. The
-adapter is responsible for translating it to the protocol's camelCase models
-and URI-based locations.
+The HTTP API retains its snake_case, path-based JSON for compatibility; the
+adapter translates protocol camelCase models and URI-based locations back into
+that shape. The embedded web workbench is unchanged and remains the reference
+for useful behavior, not for protocol wire shape.
 
 ### VS Code and other IDE clients
 
-A VS Code extension can launch one engine subprocess, open one workspace per
+A VS Code extension can launch one engine subprocess with `flowmap engine`
+(optionally `--summarizer-command <command>` to advertise `symbolSummary`), open one workspace per
 repository folder, create the language views it supports, and render query
 results using native editor navigation and webviews. Other IDE integrations can
 use the same lifecycle and stdio transport while choosing their own native or
@@ -838,7 +856,12 @@ experimental revision only when both client and engine adopt the same exact
 version identifier.
 
 An incompatible experimental revision must use a different exact version
-identifier; the identifier for this document remains `"0"`. A future version
+identifier; the identifier for this document remains `"0"`.
+
+Revisions within version `0` so far are additive only: `public` on
+`SymbolSummary` and `Symbol`, and the optional `Symbol.change`, were added when
+the reference workbench moved onto the protocol, because its public-boundary
+filter and per-node Git diffs depend on them. A future version
 `1` must define its own compatibility policy, deprecation rules, and any
 additional transports. Version `1` stability must not be inferred from this
 document.
