@@ -414,7 +414,7 @@ func declarationKeysFromSources(sources map[string][]byte) map[string]bool {
 func sourceDeclarationKeys(path string, contents []byte) []string {
 	if supportedJavaScriptPath(path) {
 		modulePath := strings.TrimSuffix(path, filepath.Ext(path))
-		names := javascriptDeclarationNames(string(contents))
+		names := javascriptDeclarationNames(path, string(contents))
 		keys := make([]string, 0, len(names))
 		for _, name := range names {
 			keys = append(keys, path+"|"+modulePath+"."+name)
@@ -448,8 +448,8 @@ func supportedJavaScriptPath(path string) bool {
 	}
 }
 
-func javascriptDeclarationNames(source string) []string {
-	return javascriptbackend.DeclarationNames(source)
+func javascriptDeclarationNames(path, source string) []string {
+	return javascriptbackend.DeclarationNames(path, source)
 }
 
 func declarationKey(path string, packageName string, declaration *ast.FuncDecl) string {

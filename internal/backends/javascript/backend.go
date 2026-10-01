@@ -437,10 +437,11 @@ func forEachParallel(ctx context.Context, count int, work func(index int)) error
 
 // DeclarationNames returns callable names for JavaScript-family source. It is
 // used by Git attribution so class methods use the same owner-qualified keys as
-// the semantic snapshot.
+// the semantic snapshot. The path selects syntax handling, such as whether JSX
+// may appear.
 // Operations (Pure): extracts callable names from explicit source text.
-func DeclarationNames(source string) []string {
-	file := newSourceFile("", "source.ts", source)
+func DeclarationNames(path, source string) []string {
+	file := newSourceFile("", filepath.ToSlash(path), source)
 	records, _ := parse(file)
 	names := make([]string, 0, len(records))
 	for _, record := range records {
@@ -988,7 +989,7 @@ func prepareSource(file *sourceFile) {
 		return
 	}
 
-	file.masked = maskSource(file.src)
+	file.masked = maskSource(file.src, jsxCapable(file.rel))
 	file.lineStarts = []int{0}
 	file.semicolons = make([]int, 0)
 	for index := 0; index < len(file.src); index++ {
@@ -1068,57 +1069,6 @@ func (cursor *braceCursor) at(offset int) int {
 	return cursor.depth
 }
 
-func maskSource(source string) string {
-	output := []byte(source)
-	for index := 0; index < len(output); {
-		if output[index] == '/' && index+1 < len(output) && output[index+1] == '/' {
-			for index < len(output) && output[index] != '\n' {
-				output[index] = ' '
-				index++
-			}
-			continue
-		}
-		if output[index] == '/' && index+1 < len(output) && output[index+1] == '*' {
-			output[index], output[index+1] = ' ', ' '
-			index += 2
-			for index+1 < len(output) && !(output[index] == '*' && output[index+1] == '/') {
-				if output[index] != '\n' {
-					output[index] = ' '
-				}
-				index++
-			}
-			if index+1 < len(output) {
-				output[index], output[index+1] = ' ', ' '
-				index += 2
-			}
-			continue
-		}
-		if output[index] == '\'' || output[index] == '"' || output[index] == '`' {
-			quote := output[index]
-			output[index] = ' '
-			index++
-			for index < len(output) {
-				if output[index] == '\\' {
-					output[index] = ' '
-					index += 2
-					continue
-				}
-				if output[index] == quote {
-					output[index] = ' '
-					index++
-					break
-				}
-				if output[index] != '\n' {
-					output[index] = ' '
-				}
-				index++
-			}
-			continue
-		}
-		index++
-	}
-	return string(output)
-}
 func insideClass(offset int, classes []*classInfo) bool {
 	for _, class := range classes {
 		if offset > class.start && offset < class.end {

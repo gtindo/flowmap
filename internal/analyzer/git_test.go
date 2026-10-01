@@ -260,7 +260,7 @@ func TestParseCatFileBatchHandlesMissingAndTruncatedObjects(t *testing.T) {
 }
 
 func TestJavaScriptDeclarationNamesIncludeOwnerQualifiedMethods(t *testing.T) {
-	names := javascriptDeclarationNames(`
+	names := javascriptDeclarationNames("service.ts", `
 export class Service {
   constructor() {}
   save() {}
