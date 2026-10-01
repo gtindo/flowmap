@@ -2,22 +2,39 @@ package gobackend
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"go/version"
 	"os/exec"
 	"runtime"
-	"strings"
 )
 
-// checkActiveToolchain protects go/packages from newer export data.
-func checkActiveToolchain(ctx context.Context, root string) error {
-	command := exec.CommandContext(ctx, "go", "env", "GOVERSION")
+// toolchainEnvironment holds the active toolchain facts the loader depends on.
+type toolchainEnvironment struct {
+	Version     string `json:"GOVERSION"`
+	Root        string `json:"GOROOT"`
+	ModuleCache string `json:"GOMODCACHE"`
+}
+
+// inspectActiveToolchain protects go/packages from newer export data and
+// reports where standard-library and module-cache sources live.
+func inspectActiveToolchain(ctx context.Context, root string) (toolchainEnvironment, error) {
+	command := exec.CommandContext(ctx, "go", "env", "-json", "GOVERSION", "GOROOT", "GOMODCACHE")
 	command.Dir = root
 	output, err := command.Output()
 	if err != nil {
-		return fmt.Errorf("inspect active Go toolchain: %w", err)
+		return toolchainEnvironment{}, fmt.Errorf("inspect active Go toolchain: %w", err)
 	}
-	return checkToolchainVersions(runtime.Version(), strings.TrimSpace(string(output)))
+
+	var environment toolchainEnvironment
+	if err := json.Unmarshal(output, &environment); err != nil {
+		return toolchainEnvironment{}, fmt.Errorf("decode active Go toolchain environment: %w", err)
+	}
+
+	if err := checkToolchainVersions(runtime.Version(), environment.Version); err != nil {
+		return toolchainEnvironment{}, err
+	}
+	return environment, nil
 }
 
 func checkToolchainVersions(applicationVersion, activeVersion string) error {
