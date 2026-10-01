@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"image/png"
 	"net/http"
@@ -590,6 +591,30 @@ func TestCancelledScanRequestCancelsEngineAnalysis(t *testing.T) {
 			t.Fatal("view stayed busy after cancellation")
 		case <-time.After(10 * time.Millisecond):
 		}
+	}
+}
+
+// TestScanCancelledBeforeStartResponseCancelsEngineAnalysis covers a request
+// that ends after analysis/start is sent but before its response is read.
+func TestScanCancelledBeforeStartResponseCancelsEngineAnalysis(t *testing.T) {
+	cancelled := make(chan struct{}, 1)
+	analyze := func(ctx context.Context, _ analyzer.Config) (*analyzer.Index, error) {
+		<-ctx.Done()
+		cancelled <- struct{}{}
+		return nil, ctx.Err()
+	}
+	app := newTestApp(t, []ProjectConfig{{Name: DefaultProjectName, Analysis: analyzer.Config{Root: "/work/project"}}}, engine.Options{Analyze: analyze})
+
+	requestContext, cancelRequest := context.WithCancel(context.Background())
+	cancelRequest()
+	if _, err := app.Scan(requestContext, DefaultProjectName, ""); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Scan() error = %v, want context.Canceled", err)
+	}
+
+	select {
+	case <-cancelled:
+	case <-testContext(t).Done():
+		t.Fatal("request cancellation did not cancel the engine analysis")
 	}
 }
 
