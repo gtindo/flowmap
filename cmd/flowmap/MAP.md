@@ -8,7 +8,7 @@ This package is Flowmap's executable shell. It translates command-line input int
 
 | File | Responsibility |
 |---|---|
-| `main.go` | `serve`/`version` dispatch, path or JSON registry parsing, optional telemetry setup, initial/lazy analysis wiring, optional summarizer setup, interrupt handling, and HTTP startup |
+| `main.go` | `serve`/`engine`/`version` dispatch, stdio engine sessions, path or JSON registry parsing, optional telemetry setup, initial/lazy analysis wiring, optional summarizer setup, interrupt handling, and HTTP startup |
 | `main_test.go` | CLI parsing, build-tag normalization, warning output, and command behavior coverage |
 
 ## Startup Flow
@@ -30,7 +30,8 @@ main
 
 ## Boundaries and Invariants
 
-- The CLI is an imperative edge; analysis decisions belong in `internal/analyzer/`.
+- The CLI is an imperative edge; analysis decisions belong in `internal/analyzer/` and session behavior in `internal/engine/`.
+- `flowmap engine` writes only protocol frames to stdout; it exits non-zero when input ends or `exit` arrives before a completed `shutdown`.
 - `serve` accepts either one module path or a JSON registry through `--config`; the legacy path remains eager while registry projects are lazy.
 - Build tags are normalized before they enter `analyzer.Config`.
 - Package load failures may produce a warning while still yielding a usable partial index.

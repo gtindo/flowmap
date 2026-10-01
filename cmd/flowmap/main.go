@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/gtindo/flowmap/internal/analyzer"
+	"github.com/gtindo/flowmap/internal/engine"
 	"github.com/gtindo/flowmap/internal/server"
 	"github.com/gtindo/flowmap/internal/telemetry"
 )
@@ -31,14 +32,19 @@ func main() {
 	}
 }
 
-// run executes the serve command and returns contextual failures to main.
+// run executes a command and returns contextual failures to main.
 func run(arguments []string) error {
 	if len(arguments) == 1 && arguments[0] == "version" {
 		fmt.Println(version)
 		return nil
 	}
+	if len(arguments) > 0 && arguments[0] == "engine" {
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+		defer stop()
+		return runEngine(ctx, arguments[1:], os.Stdin, os.Stdout, os.Stderr)
+	}
 	if len(arguments) == 0 || arguments[0] != "serve" {
-		return fmt.Errorf("usage: flowmap <serve|version>; flowmap serve <module-path> [--addr %s] [--tags tag1,tag2] [--summarizer-command command] | flowmap serve --config projects.json", defaultAddress)
+		return fmt.Errorf("usage: flowmap <serve|engine|version>; flowmap serve <module-path> [--addr %s] [--tags tag1,tag2] [--summarizer-command command] | flowmap serve --config projects.json | flowmap engine [--summarizer-command command]", defaultAddress)
 	}
 
 	serveFlags := flag.NewFlagSet("serve", flag.ContinueOnError)
@@ -137,6 +143,55 @@ func run(arguments []string) error {
 	slog.InfoContext(ctx, "flowmap server starting", "address", *address, "functions", functionCount, "languages", len(analysisConfigs))
 
 	return app.Listen(ctx, *address)
+}
+
+// runEngine serves the engine protocol on stdio. Standard output carries only
+// protocol frames; diagnostics go to standard error.
+// Side Effect (Edge): owns process streams for the session lifetime.
+func runEngine(ctx context.Context, arguments []string, input io.Reader, output io.Writer, diagnostics io.Writer) error {
+	engineFlags := flag.NewFlagSet("engine", flag.ContinueOnError)
+	engineFlags.SetOutput(diagnostics)
+	summarizerCommand := engineFlags.String("summarizer-command", "", "opt-in JSON stdin/stdout summarizer command")
+	if err := engineFlags.Parse(arguments); err != nil {
+		return err
+	}
+	if engineFlags.NArg() > 0 {
+		return fmt.Errorf("engine accepts no positional arguments; open workspaces through the protocol")
+	}
+
+	shutdownTelemetry, _, err := telemetry.Setup(ctx, version, diagnostics)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err := shutdownTelemetry(context.Background()); err != nil {
+			fmt.Fprintln(diagnostics, "flowmap: telemetry shutdown:", err)
+		}
+	}()
+
+	options, err := newEngineOptions(*summarizerCommand, slog.New(slog.NewTextHandler(diagnostics, nil)))
+	if err != nil {
+		return err
+	}
+
+	return engine.New(options).Serve(ctx, input, output)
+}
+
+// newEngineOptions assembles engine configuration shared by serve and engine.
+func newEngineOptions(summarizerCommand string, logger *slog.Logger) (engine.Options, error) {
+	options := engine.Options{Version: version, Logger: logger}
+	if strings.TrimSpace(summarizerCommand) == "" {
+		return options, nil
+	}
+
+	cache, err := engine.NewSummaryCache()
+	if err != nil {
+		return engine.Options{}, err
+	}
+
+	options.Summarizer = engine.CommandSummarizer{Command: summarizerCommand}
+	options.SummaryCache = cache
+	return options, nil
 }
 
 type projectRegistry struct {
