@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"go/ast"
+	"go/parser"
 	"go/token"
 	"go/types"
 	"os"
@@ -26,6 +27,12 @@ import (
 // Backend converts Go compiler facts into a language-neutral semantic snapshot.
 type Backend struct{}
 
+const (
+	// localParseMode matches the go/packages default parser behavior.
+	localParseMode      = parser.AllErrors | parser.ParseComments
+	dependencyParseMode = parser.AllErrors | parser.SkipObjectResolution
+)
+
 type symbolMeta struct {
 	ssaFunction *ssa.Function
 	syntax      ast.Node
@@ -40,7 +47,8 @@ func (Backend) Analyze(ctx context.Context, request semantic.AnalysisRequest) (s
 		return semantic.Snapshot{}, fmt.Errorf("resolve analysis root: %w", err)
 	}
 
-	if err := checkActiveToolchain(ctx, root); err != nil {
+	toolchain, err := inspectActiveToolchain(ctx, root)
+	if err != nil {
 		return semantic.Snapshot{}, err
 	}
 
@@ -57,6 +65,7 @@ func (Backend) Analyze(ctx context.Context, request semantic.AnalysisRequest) (s
 		Mode: packages.NeedName | packages.NeedFiles | packages.NeedCompiledGoFiles |
 			packages.NeedSyntax | packages.NeedTypes | packages.NeedTypesInfo |
 			packages.NeedImports | packages.NeedDeps,
+		ParseFile: parseWithoutDependencyBodies(root, toolchain),
 	}
 	loaded, loadErr := packages.Load(packageConfig, "./...")
 	if loadErr != nil {
@@ -65,6 +74,7 @@ func (Backend) Analyze(ctx context.Context, request semantic.AnalysisRequest) (s
 	if len(loaded) == 0 {
 		return semantic.Snapshot{}, fmt.Errorf("load Go packages: no packages found beneath %s\nReproduce with: %s", root, reproductionCommand(root, request.BuildTags))
 	}
+	forgiveStrippedBodyErrors(loaded, func(filename string) bool { return isDependencySource(root, toolchain, filename) })
 
 	diagnostics := collectDiagnosticReport(root, request.BuildTags, loaded)
 	healthyPackages := make([]*packages.Package, 0, len(loaded))
@@ -77,7 +87,7 @@ func (Backend) Analyze(ctx context.Context, request semantic.AnalysisRequest) (s
 		return semantic.Snapshot{}, fmt.Errorf("load Go packages: no analyzable packages beneath %s\n%s", root, formatDiagnosticReport(root, diagnostics))
 	}
 
-	program, ssaPackages := ssautil.AllPackages(healthyPackages, ssa.InstantiateGenerics)
+	program, ssaPackages := ssautil.Packages(healthyPackages, ssa.InstantiateGenerics)
 	program.Build()
 
 	metas := collectSymbols(root, program, ssaPackages, packagesByTypes(healthyPackages))
@@ -104,6 +114,74 @@ func (Backend) Analyze(ctx context.Context, request semantic.AnalysisRequest) (s
 	return semantic.Snapshot{Root: root, Language: "go", Symbols: symbols, Relationships: relationships, Diagnostics: diagnostics}, nil
 }
 
+// parseWithoutDependencyBodies drops function bodies from standard-library and
+// module-cache sources before type checking. Dependencies still contribute
+// declarations and types, but Flowmap no longer type-checks bodies it never
+// reports, which dominated analysis time and memory on real modules. Files
+// elsewhere, such as generated test mains, cgo output, and replaced sibling
+// modules, keep their bodies.
+func parseWithoutDependencyBodies(root string, toolchain toolchainEnvironment) func(*token.FileSet, string, []byte) (*ast.File, error) {
+	return func(fileSet *token.FileSet, filename string, source []byte) (*ast.File, error) {
+		if !isDependencySource(root, toolchain, filename) {
+			return parser.ParseFile(fileSet, filename, source, localParseMode)
+		}
+
+		file, err := parser.ParseFile(fileSet, filename, source, dependencyParseMode)
+		if file == nil {
+			return nil, err
+		}
+		for _, declaration := range file.Decls {
+			if function, ok := declaration.(*ast.FuncDecl); ok {
+				function.Body = nil
+			}
+		}
+		return file, err
+	}
+}
+
+// forgiveStrippedBodyErrors clears dependency errors caused only by removed
+// bodies, such as imports used solely inside them. Such soft errors leave type
+// information valid, but go/packages would otherwise mark every importer
+// IllTyped and exclude it from SSA construction.
+func forgiveStrippedBodyErrors(roots []*packages.Package, isDependency func(string) bool) {
+	packages.Visit(roots, nil, func(loadedPackage *packages.Package) {
+		if len(loadedPackage.Errors) > 0 && onlySoftDependencyTypeErrors(loadedPackage, isDependency) {
+			loadedPackage.Errors = nil
+		}
+
+		loadedPackage.IllTyped = len(loadedPackage.Errors) > 0
+		for _, imported := range loadedPackage.Imports {
+			if imported.IllTyped {
+				loadedPackage.IllTyped = true
+			}
+		}
+	})
+}
+
+func onlySoftDependencyTypeErrors(loadedPackage *packages.Package, isDependency func(string) bool) bool {
+	if len(loadedPackage.Errors) != len(loadedPackage.TypeErrors) {
+		return false
+	}
+	for _, typeError := range loadedPackage.TypeErrors {
+		if !typeError.Soft || !isDependency(typeError.Fset.Position(typeError.Pos).Filename) {
+			return false
+		}
+	}
+	return true
+}
+
+func isDependencySource(root string, toolchain toolchainEnvironment, filename string) bool {
+	if isLocalFile(root, filename) {
+		return false
+	}
+	for _, directory := range []string{toolchain.Root, toolchain.ModuleCache} {
+		if directory != "" && isLocalFile(directory, filename) {
+			return true
+		}
+	}
+	return false
+}
+
 func packagesByTypes(roots []*packages.Package) map[*types.Package]*packages.Package {
 	result := make(map[*types.Package]*packages.Package)
 	packages.Visit(roots, nil, func(pkg *packages.Package) {
@@ -122,6 +200,7 @@ func collectSymbols(root string, program *ssa.Program, ssaPackages []*ssa.Packag
 		}
 	}
 
+	sources := make(map[string][]byte)
 	result := make(map[string]*symbolMeta)
 	for ssaFunction := range ssautil.AllFunctions(program) {
 		syntax := ssaFunction.Syntax()
@@ -172,7 +251,7 @@ func collectSymbols(root string, program *ssa.Program, ssaPackages []*ssa.Packag
 				ID: id, Kind: kind, Name: ssaFunction.Name(), QualifiedName: qualifiedName,
 				Package:  ssaFunction.Pkg.Pkg.Path(),
 				Location: semantic.Location{File: position.Filename, Line: position.Line, EndLine: endPosition.Line},
-				Source:   readSource(position, endPosition), Documentation: documentation,
+				Source:   readSource(sources, position, endPosition), Documentation: documentation,
 				Signature: semantic.Signature{
 					Display: readableType(signature), Parameters: tupleStrings(signature.Params(), signature.Variadic()),
 					Results: tupleStrings(signature.Results(), false), Contracts: signatureContracts(signature),
@@ -263,6 +342,7 @@ func collectRelationships(nodes map[*ssa.Function]*callgraph.Node, metas map[str
 		}
 	}
 
+	markUnresolvedDynamicCalls(nodes, metas)
 	collectDependencyRelationships(metas, idByObject, idBySyntax, add)
 	sort.Slice(relationships, func(left, right int) bool {
 		leftRelationship, rightRelationship := relationships[left], relationships[right]
@@ -278,6 +358,33 @@ func collectRelationships(nodes map[*ssa.Function]*callgraph.Node, metas map[str
 		return leftRelationship.Location < rightRelationship.Location
 	})
 	return relationships
+}
+
+// markUnresolvedDynamicCalls keeps purity proofs sound when no callee is known.
+// Dependency bodies are not analyzed, so values that originate outside the
+// module, or callbacks no local caller supplies, have no call-graph candidates.
+func markUnresolvedDynamicCalls(nodes map[*ssa.Function]*callgraph.Node, metas map[string]*symbolMeta) {
+	for _, meta := range metas {
+		resolvedSites := make(map[ssa.CallInstruction]bool)
+		if node := nodes[meta.ssaFunction]; node != nil {
+			for _, graphEdge := range node.Out {
+				resolvedSites[graphEdge.Site] = true
+			}
+		}
+
+		for _, block := range meta.ssaFunction.Blocks {
+			for _, instruction := range block.Instrs {
+				call, isCall := instruction.(ssa.CallInstruction)
+				if !isCall || call.Common().StaticCallee() != nil || resolvedSites[call] {
+					continue
+				}
+				if _, isBuiltin := call.Common().Value.(*ssa.Builtin); isBuiltin {
+					continue
+				}
+				addExternalCallFact(meta, "", "")
+			}
+		}
+	}
 }
 
 func collectDependencyRelationships(
@@ -413,9 +520,15 @@ func isLocalFile(root, filename string) bool {
 	return err == nil && relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator))
 }
 
-func readSource(start, end token.Position) string {
-	contents, err := os.ReadFile(start.Filename)
-	if err != nil || start.Offset < 0 || end.Offset > len(contents) || start.Offset >= end.Offset {
+// readSource caches file contents because a file usually declares many functions.
+func readSource(sources map[string][]byte, start, end token.Position) string {
+	contents, cached := sources[start.Filename]
+	if !cached {
+		contents, _ = os.ReadFile(start.Filename)
+		sources[start.Filename] = contents
+	}
+
+	if start.Offset < 0 || end.Offset > len(contents) || start.Offset >= end.Offset {
 		return ""
 	}
 	return string(contents[start.Offset:end.Offset])

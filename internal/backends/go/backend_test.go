@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"testing"
 
 	"github.com/gtindo/flowmap/internal/semantic"
@@ -141,4 +142,54 @@ func findSymbol(t *testing.T, symbols []semantic.Symbol, qualifiedName string) s
 func expectedID(identity string) string {
 	digest := sha256.Sum256([]byte(identity))
 	return hex.EncodeToString(digest[:16])
+}
+
+func TestBackendMarksDynamicCallsWithoutAnalyzedCalleesAsUnknown(t *testing.T) {
+	_, filename, _, _ := runtime.Caller(0)
+	root := filepath.Join(filepath.Dir(filename), "testdata", "unresolved")
+	snapshot, err := (Backend{}).Analyze(context.Background(), semantic.AnalysisRequest{Root: root})
+	if err != nil {
+		t.Fatalf("Analyze() error = %v", err)
+	}
+
+	unknownCall := semantic.Fact{Kind: semantic.FactExternalCall}
+	tests := []struct {
+		name string
+		want bool
+	}{
+		{name: "unresolved.Describe", want: true},
+		{name: "unresolved.Apply", want: true},
+		{name: "unresolved.Length", want: false},
+	}
+	for _, test := range tests {
+		symbol := findSymbol(t, snapshot.Symbols, test.name)
+		if got := slices.Contains(symbol.Facts, unknownCall); got != test.want {
+			t.Errorf("%s unknown external call = %t, want %t; facts = %#v", test.name, got, test.want, symbol.Facts)
+		}
+	}
+}
+
+func TestIsDependencySourceSelectsOnlyToolchainAndModuleCacheFiles(t *testing.T) {
+	root := filepath.FromSlash("/work/module")
+	toolchain := toolchainEnvironment{Root: filepath.FromSlash("/go/root"), ModuleCache: filepath.FromSlash("/go/mod")}
+	tests := []struct {
+		filename string
+		want     bool
+	}{
+		{filename: "/go/root/src/net/http/server.go", want: true},
+		{filename: "/go/mod/example.com/library@v1.0.0/library.go", want: true},
+		{filename: "/work/module/main.go", want: false},
+		{filename: "/work/sibling/replaced.go", want: false},
+		{filename: "/cache/go-build/ab/generated-testmain", want: false},
+	}
+	for _, test := range tests {
+		if got := isDependencySource(root, toolchain, filepath.FromSlash(test.filename)); got != test.want {
+			t.Errorf("isDependencySource(%s) = %t, want %t", test.filename, got, test.want)
+		}
+	}
+
+	nested := toolchainEnvironment{ModuleCache: filepath.FromSlash("/go/mod")}
+	if isDependencySource(filepath.FromSlash("/go/mod/example.com/analyzed@v1.0.0"), nested, filepath.FromSlash("/go/mod/example.com/analyzed@v1.0.0/file.go")) {
+		t.Error("isDependencySource() stripped a file beneath the analysis root")
+	}
 }
