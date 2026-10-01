@@ -299,7 +299,9 @@ func (app *App) Scan(ctx context.Context, name string, language string) (RescanR
 		return RescanResult{}, err
 	}
 
-	analysisID, err := app.client.StartAnalysis(ctx, protocol.AnalysisStartParams{ViewID: languageEntry.viewID})
+	// The engine may accept the start before ctx ends, so always read the
+	// analysis id; awaitAnalysis then cancels it if the request is gone.
+	analysisID, err := app.client.StartAnalysis(context.WithoutCancel(ctx), protocol.AnalysisStartParams{ViewID: languageEntry.viewID})
 	if err != nil {
 		if hasCode(err, protocol.CodeAnalysisAlreadyRunning) {
 			return RescanResult{}, errScanInProgress
