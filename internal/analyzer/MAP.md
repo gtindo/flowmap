@@ -8,7 +8,7 @@ This package turns a language-neutral semantic snapshot into an immutable, evide
 
 | File | Responsibility |
 |---|---|
-| `model.go` | Public analysis data: functions (including public-boundary metadata), contracts, classifications, edges, graphs, Git snapshots, and `Index` |
+| `model.go` | Public analysis data: functions (including symbol kind and public-boundary metadata), contracts, classifications, edges, graphs, Git snapshots, and `Index` |
 | `analyzer.go` | Built-in-backend entry point and pure semantic-to-`Index` translation of symbols, contracts, relationships, source, intent, and diagnostics |
 | `classify.go` | Authored labels, direct side-effect evidence, known-pure packages, and conservative purity propagation |
 | `query.go` | Deterministic symbol search, function lookup, and bounded upstream/downstream graph traversal |

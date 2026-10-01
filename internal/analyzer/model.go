@@ -32,6 +32,7 @@ type FunctionChange struct {
 type Function struct {
 	ID             string          `json:"id"`
 	Name           string          `json:"name"`
+	Kind           string          `json:"kind,omitempty"`
 	QualifiedName  string          `json:"qualified_name"`
 	Package        string          `json:"package"`
 	Language       string          `json:"language"`
