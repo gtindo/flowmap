@@ -45,7 +45,7 @@ func analyzeWithDeadline(t *testing.T, root string) semantic.Snapshot {
 func TestBackendAnalyzesJSXTextWithoutHanging(t *testing.T) {
 	root := t.TempDir()
 	writeJavaScriptFixture(t, root, "App.tsx", `export function App() {
-  return <p>Hello &amp; welcome, a > b {label()}</p>;
+  return <p>Hello &amp; welcome, it's a > b {label()}</p>;
 }
 const label = () => "x";
 `)
