@@ -144,6 +144,121 @@ func TestCaptureGitSnapshotHandlesUnbornAndNonGitDirectories(t *testing.T) {
 	}
 }
 
+func TestCaptureGitSnapshotClassifiesAgainstDiffedHeadFiles(t *testing.T) {
+	repository := t.TempDir()
+	project := filepath.Join(repository, "project")
+	if err := os.MkdirAll(project, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, repository, "init", "-q")
+	runGit(t, repository, "config", "user.email", "flowmap@example.com")
+	runGit(t, repository, "config", "user.name", "Flowmap Test")
+	runGit(t, repository, "config", "diff.mnemonicPrefix", "true")
+	writeTestFile(t, filepath.Join(project, "kept.go"), "package sample\n\nfunc Kept() int { return 1 }\n")
+	writeTestFile(t, filepath.Join(project, "other.go"), "package sample\n\nfunc Other() {}\n")
+	writeTestFile(t, filepath.Join(project, "removed.go"), "package sample\n\nfunc Moved() {}\n")
+	writeTestFile(t, filepath.Join(project, "untouched.go"), "package sample\n\nfunc Untouched() {}\n")
+	runGit(t, repository, "add", ".")
+	runGit(t, repository, "commit", "-qm", "initial")
+
+	writeTestFile(t, filepath.Join(project, "kept.go"), "package sample\n\nfunc Kept() int { return 2 }\n\nfunc Added() {}\n")
+	writeTestFile(t, filepath.Join(project, "other.go"), "package sample\n\nfunc Other() {}\n\nfunc Moved() {}\n")
+	if err := os.Remove(filepath.Join(project, "removed.go")); err != nil {
+		t.Fatal(err)
+	}
+	writeTestFile(t, filepath.Join(project, "staged.go"), "package sample\n\nfunc Staged() {}\n")
+	runGit(t, repository, "add", "project/staged.go")
+	writeTestFile(t, filepath.Join(project, "loose.go"), "package sample\n\nfunc Loose() {}\n")
+
+	functions := testFunctionsFromFiles(t, project, "kept.go", "other.go", "untouched.go", "staged.go", "loose.go")
+	snapshot := captureGitSnapshot(context.Background(), project, functions)
+
+	want := map[string]string{
+		"sample.Added":  "new",
+		"sample.Kept":   "updated",
+		"sample.Loose":  "new",
+		"sample.Moved":  "updated",
+		"sample.Staged": "new",
+	}
+	got := make(map[string]string, len(snapshot.ChangedFunctions))
+	for _, changed := range snapshot.ChangedFunctions {
+		got[changed.QualifiedName] = changed.Kind
+	}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("changed kinds = %v, want %v", got, want)
+	}
+}
+
+func TestBaselineFunctionKeysReadsRequestedHeadFiles(t *testing.T) {
+	repository := t.TempDir()
+	runGit(t, repository, "init", "-q")
+	runGit(t, repository, "config", "user.email", "flowmap@example.com")
+	runGit(t, repository, "config", "user.name", "Flowmap Test")
+	if err := os.MkdirAll(filepath.Join(repository, "web"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeTestFile(t, filepath.Join(repository, "web", "app.js"), "export function start() {}\n")
+	writeTestFile(t, filepath.Join(repository, "web", "skipped.js"), "export function skipped() {}\n")
+	writeTestFile(t, filepath.Join(repository, "space name.go"), "package root\n\nfunc (s *Server) Run() {}\n")
+	runGit(t, repository, "add", ".")
+	runGit(t, repository, "commit", "-qm", "initial")
+
+	keys := baselineFunctionKeys(context.Background(), repository, []string{"web/app.js", "space name.go", "web/absent.js"})
+
+	want := map[string]bool{
+		"web/app.js|web/app.start": true,
+		".|root|*Server|Run":       true,
+	}
+	if fmt.Sprint(keys) != fmt.Sprint(want) {
+		t.Fatalf("baseline keys = %v, want %v", keys, want)
+	}
+}
+
+func TestBaselinePathsSelectsOnlyDiffedHeadFiles(t *testing.T) {
+	spans := map[string][]functionSpan{
+		"pkg/changed.go": {{id: "changed"}},
+		"web/app.js":     {{id: "app"}},
+		"web/renamed.js": {{id: "renamed"}},
+	}
+	files := []fileDiff{
+		{path: "pkg/changed.go", oldPath: "pkg/changed.go"},
+		{path: "", oldPath: "pkg/deleted.go"},
+		{path: "pkg/new.go", oldPath: ""},
+		{path: "other/changed.go", oldPath: "other/changed.go"},
+		{path: "web/app.js", oldPath: "web/app.js"},
+		{path: "web/renamed.js", oldPath: "web/original.js"},
+		{path: ".yarn/releases/yarn.cjs", oldPath: ".yarn/releases/yarn.cjs"},
+		{path: "README.md", oldPath: "README.md"},
+	}
+
+	got := strings.Join(baselinePaths(files, spans), ",")
+
+	if want := "pkg/changed.go,pkg/deleted.go,web/app.js"; got != want {
+		t.Fatalf("baseline paths = %q, want %q", got, want)
+	}
+}
+
+func TestParseCatFileBatchHandlesMissingAndTruncatedObjects(t *testing.T) {
+	output := []byte("1111 blob 5\nhello\nHEAD:space missing.go missing\n2222 blob 0\n\n3333 tree 3\nabc\n")
+	contents, err := parseCatFileBatch(output, []string{"a.go", "space missing.go", "empty.go", "dir"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(contents["a.go"]) != "hello" || len(contents) != 2 {
+		t.Fatalf("contents = %q", contents)
+	}
+	if empty, ok := contents["empty.go"]; !ok || len(empty) != 0 {
+		t.Fatalf("empty blob = %q, %v", empty, ok)
+	}
+
+	if _, err := parseCatFileBatch([]byte("1111 blob 10\nshort\n"), []string{"a.go"}); err == nil {
+		t.Fatal("truncated body parsed without error")
+	}
+	if _, err := parseCatFileBatch(nil, []string{"a.go"}); err == nil {
+		t.Fatal("missing header parsed without error")
+	}
+}
+
 func TestJavaScriptDeclarationNamesIncludeOwnerQualifiedMethods(t *testing.T) {
 	names := javascriptDeclarationNames(`
 export class Service {
