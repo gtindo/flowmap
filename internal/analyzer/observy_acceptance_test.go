@@ -19,7 +19,7 @@ func TestObservyJourneys(t *testing.T) {
 	}
 	assertJourney(t, index, "/ingestion", "LogServer).Export", "parseIncomingLogRequest")
 	assertJourney(t, index, "/query/executor", "ExecuteOQL", "executeSQLite")
-	assertJourney(t, index, "/web/features/metrics", "handleMetricsExplorer", "BuildInitialMetricsView")
+	assertJourney(t, index, "/web/features/metrics", "renderMetricsExplorer", "BuildInitialMetricsView")
 }
 
 // assertJourney confirms a named entry can reach an expected downstream operation.
