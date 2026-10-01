@@ -474,3 +474,229 @@ func fixtureIndexWithRoot(id string, qualifiedName string) *analyzer.Index {
 	root := analyzer.Function{ID: id, Name: qualifiedName, QualifiedName: qualifiedName, Package: "sample", Classification: analyzer.Classification{Kind: "pure"}}
 	return &analyzer.Index{Functions: map[string]analyzer.Function{id: root}, Outgoing: map[string][]analyzer.Edge{}, Incoming: map[string][]analyzer.Edge{}}
 }
+
+// TestMultiLanguageProjectScansViewsIndependently verifies the per-language
+// scan route the browser uses and that views stay isolated.
+func TestMultiLanguageProjectScansViewsIndependently(t *testing.T) {
+	goIndex := fixtureIndexWithRoot("go-root", "sample.GoRoot")
+	javascriptIndex := fixtureIndexWithRoot("js-root", "web.JavaScriptRoot")
+	analyze := func(_ context.Context, config analyzer.Config) (*analyzer.Index, error) {
+		if config.Language == analyzer.LanguageJavaScript {
+			if len(config.BuildTags) != 0 {
+				return nil, fmt.Errorf("javascript view received build tags %v", config.BuildTags)
+			}
+			return javascriptIndex, nil
+		}
+		return goIndex, nil
+	}
+	app := newTestApp(t, []ProjectConfig{{Name: "mixed", Analyses: []analyzer.Config{
+		{Root: "/work/mixed", Language: analyzer.LanguageGo, BuildTags: []string{"integration"}},
+		{Root: "/work/mixed", Language: analyzer.LanguageJavaScript},
+	}}}, engine.Options{Analyze: analyze})
+
+	scan := serve(app, http.MethodPost, "/api/projects/mixed/languages/javascript/scan")
+	if scan.Code != http.StatusOK || !strings.Contains(scan.Body.String(), `"function_count":1`) {
+		t.Fatalf("javascript scan = %d %s", scan.Code, scan.Body.String())
+	}
+
+	var projects []ProjectStatus
+	if err := json.Unmarshal(serve(app, http.MethodGet, "/api/projects").Body.Bytes(), &projects); err != nil {
+		t.Fatal(err)
+	}
+	languages := map[string]string{}
+	for _, language := range projects[0].Languages {
+		languages[language.Language] = language.Status
+	}
+	if languages["go"] != "unscanned" || languages["javascript"] != "ready" || projects[0].Status != "unscanned" {
+		t.Fatalf("project status after javascript scan = %#v", projects)
+	}
+
+	if response := serve(app, http.MethodGet, "/api/search?project=mixed&language=go&q=Root"); response.Code != http.StatusNotFound {
+		t.Fatalf("unscanned go view search = %d %s", response.Code, response.Body.String())
+	}
+	if response := serve(app, http.MethodGet, "/api/search?project=mixed&language=javascript&q=Root"); response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "web.JavaScriptRoot") || strings.Contains(response.Body.String(), "sample.GoRoot") {
+		t.Fatalf("javascript search = %d %s", response.Code, response.Body.String())
+	}
+
+	if response := serve(app, http.MethodPost, "/api/projects/mixed/languages/go/scan"); response.Code != http.StatusOK {
+		t.Fatalf("go scan = %d %s", response.Code, response.Body.String())
+	}
+	if response := serve(app, http.MethodGet, "/api/search?project=mixed&language=go&q=Root"); !strings.Contains(response.Body.String(), "sample.GoRoot") || strings.Contains(response.Body.String(), "web.JavaScriptRoot") {
+		t.Fatalf("go search = %s", response.Body.String())
+	}
+	if response := serve(app, http.MethodGet, "/api/projects"); !strings.Contains(response.Body.String(), `"name":"mixed","status":"ready","function_count":2`) {
+		t.Fatalf("projects after both scans = %s", response.Body.String())
+	}
+
+	if response := serve(app, http.MethodPost, "/api/projects/mixed/languages/rust/scan"); response.Code != http.StatusNotFound {
+		t.Fatalf("unknown language scan = %d %s", response.Code, response.Body.String())
+	}
+	if response := serve(app, http.MethodGet, "/api/search?project=mixed&q=Root"); response.Code != http.StatusNotFound {
+		t.Fatalf("ambiguous language search = %d %s", response.Code, response.Body.String())
+	}
+}
+
+// TestCancelledScanRequestCancelsEngineAnalysis verifies a disconnected
+// browser does not leave an analysis holding the view.
+func TestCancelledScanRequestCancelsEngineAnalysis(t *testing.T) {
+	started := make(chan struct{}, 2)
+	cancelled := make(chan struct{}, 1)
+	var calls atomic.Int32
+	analyze := func(ctx context.Context, _ analyzer.Config) (*analyzer.Index, error) {
+		if calls.Add(1) > 1 {
+			return fixtureIndex(), nil
+		}
+		started <- struct{}{}
+		<-ctx.Done()
+		cancelled <- struct{}{}
+		return nil, ctx.Err()
+	}
+	app := newTestApp(t, []ProjectConfig{{Name: DefaultProjectName, Analysis: analyzer.Config{Root: "/work/project"}}}, engine.Options{Analyze: analyze})
+
+	requestContext, cancelRequest := context.WithCancel(context.Background())
+	done := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		response := httptest.NewRecorder()
+		app.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/rescan", nil).WithContext(requestContext))
+		done <- response
+	}()
+	<-started
+	cancelRequest()
+
+	ctx := testContext(t)
+	select {
+	case <-cancelled:
+	case <-ctx.Done():
+		t.Fatal("request cancellation did not cancel the engine analysis")
+	}
+	if response := <-done; response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("cancelled scan = %d %s", response.Code, response.Body.String())
+	}
+
+	// The view becomes free once the engine reports the cancellation.
+	for {
+		response := serve(app, http.MethodPost, "/api/rescan")
+		if response.Code == http.StatusOK {
+			break
+		}
+		if response.Code != http.StatusConflict {
+			t.Fatalf("rescan after cancellation = %d %s", response.Code, response.Body.String())
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatal("view stayed busy after cancellation")
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+}
+
+// TestAdapterCollectsEveryPage verifies Git changes and diagnostics beyond one
+// protocol page reach the browser and CLI.
+func TestAdapterCollectsEveryPage(t *testing.T) {
+	const changeCount = 2*protocol.MaxPageLimit + 7
+	const diagnosticCount = protocol.MaxPageLimit + 3
+	index := fixtureIndex()
+	index.Git.ChangedFunctions = nil
+	for number := range changeCount {
+		id := fmt.Sprintf("changed-%d", number)
+		index.Functions[id] = analyzer.Function{ID: id, QualifiedName: id, Package: "sample", File: "/work/sample.go", Line: number + 1, Classification: analyzer.Classification{Kind: "unknown"}, Change: &analyzer.FunctionChange{Kind: "new", Diff: "+x\n"}}
+		index.Git.ChangedFunctions = append(index.Git.ChangedFunctions, analyzer.ChangedFunction{ID: id, QualifiedName: id, Package: "sample", File: "/work/sample.go", Line: number + 1, Kind: "new"})
+	}
+	index.LoadReport = analyzer.LoadReport{Language: "go", TotalUnits: diagnosticCount, FailedUnits: diagnosticCount}
+	for number := range diagnosticCount {
+		index.LoadReport.Diagnostics = append(index.LoadReport.Diagnostics, analyzer.LoadDiagnostic{Kind: "type", Message: fmt.Sprintf("problem %d", number)})
+	}
+
+	app := newTestApp(t, []ProjectConfig{{Name: DefaultProjectName, Analysis: analyzer.Config{Root: "/work/project"}}}, engine.Options{Analyze: func(context.Context, analyzer.Config) (*analyzer.Index, error) { return index, nil }})
+	result, err := app.Scan(testContext(t), "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.LoadReport.Diagnostics) != diagnosticCount || len(result.GitStatus.ChangedFunctions) != changeCount {
+		t.Fatalf("scan collected %d diagnostics and %d changes", len(result.LoadReport.Diagnostics), len(result.GitStatus.ChangedFunctions))
+	}
+	if last := result.GitStatus.ChangedFunctions[changeCount-1]; last.ID != fmt.Sprintf("changed-%d", changeCount-1) {
+		t.Fatalf("change order not preserved across pages: last = %s", last.ID)
+	}
+
+	var gitStatus analyzer.GitSnapshot
+	if err := json.Unmarshal(serve(app, http.MethodGet, "/api/git-status").Body.Bytes(), &gitStatus); err != nil || len(gitStatus.ChangedFunctions) != changeCount {
+		t.Fatalf("git-status returned %d changes, %v", len(gitStatus.ChangedFunctions), err)
+	}
+}
+
+// TestFunctionDetailRoundTripsContractsAndLocations verifies protocol models
+// translate back into the browser's path-based JSON.
+func TestFunctionDetailRoundTripsContractsAndLocations(t *testing.T) {
+	index := fixtureIndex()
+	root := index.Functions["root"]
+	root.Kind, root.EndLine, root.Parameters, root.Results = "method", 14, []string{"Config"}, []string{"error"}
+	root.Contracts = []analyzer.Contract{
+		{Name: "sample.Config", Kind: "struct", Fields: []analyzer.Field{{Name: "Root", Type: "string"}}},
+		{Name: "sample.Store", Kind: "interface", Methods: []string{"Load() error"}},
+	}
+	index.Functions["root"] = root
+	index.Edges[0].CallSite = "/work/with space/sample.go:12"
+	index.Outgoing["root"][0].CallSite = index.Edges[0].CallSite
+
+	app := newScannedApp(t, index, engine.Options{})
+	var function analyzer.Function
+	if err := json.Unmarshal(serve(app, http.MethodGet, "/api/functions/root").Body.Bytes(), &function); err != nil {
+		t.Fatal(err)
+	}
+	if function.File != "/work/sample.go" || function.Line != 10 || function.EndLine != 14 || function.Kind != "method" || len(function.Contracts) != 2 {
+		t.Fatalf("function = %#v", function)
+	}
+	if config := function.Contracts[0]; config.Name != "sample.Config" || len(config.Fields) != 1 || config.Fields[0].Type != "string" {
+		t.Fatalf("struct contract = %#v", config)
+	}
+	if store := function.Contracts[1]; store.Kind != "interface" || len(store.Methods) != 1 || store.Methods[0] != "Load() error" {
+		t.Fatalf("interface contract = %#v", store)
+	}
+
+	var graph analyzer.Graph
+	if err := json.Unmarshal(serve(app, http.MethodGet, "/api/graph?root=root&direction=downstream&depth=1").Body.Bytes(), &graph); err != nil {
+		t.Fatal(err)
+	}
+	if len(graph.Edges) != 1 || graph.Edges[0].CallSite != "/work/with space/sample.go:12" {
+		t.Fatalf("graph edges = %#v", graph.Edges)
+	}
+
+	if response := serve(app, http.MethodGet, "/api/functions/missing"); response.Code != http.StatusNotFound || !strings.Contains(response.Body.String(), "function not found") {
+		t.Fatalf("missing function = %d %s", response.Code, response.Body.String())
+	}
+	if response := serve(app, http.MethodGet, "/api/graph?root=missing&direction=sideways&depth=99"); response.Code != http.StatusNotFound {
+		t.Fatalf("missing graph root = %d %s", response.Code, response.Body.String())
+	}
+}
+
+func TestHTTPStatusMapsProtocolErrors(t *testing.T) {
+	cases := []struct {
+		err  error
+		want int
+	}{
+		{fmt.Errorf("project %w", errNotFound), http.StatusNotFound},
+		{errScanInProgress, http.StatusConflict},
+		{context.Canceled, http.StatusServiceUnavailable},
+		{fmt.Errorf("unexpected"), http.StatusInternalServerError},
+		{protocol.Errorf(protocol.CodeInvalidParams, "bad"), http.StatusBadRequest},
+		{protocol.Errorf(protocol.CodeSymbolNotFound, "x"), http.StatusNotFound},
+		{protocol.Errorf(protocol.CodeViewNotFound, "x"), http.StatusNotFound},
+		{protocol.Errorf(protocol.CodeWorkspaceNotFound, "x"), http.StatusNotFound},
+		{fmt.Errorf("wrapped: %w", protocol.Errorf(protocol.CodeSnapshotUnavailable, "x")), http.StatusNotFound},
+		{protocol.Errorf(protocol.CodeAnalysisAlreadyRunning, "x"), http.StatusConflict},
+		{protocol.Errorf(protocol.CodeCapabilityNotSupported, "x"), http.StatusNotImplemented},
+		{protocol.Errorf(protocol.CodeInternalError, "x"), http.StatusInternalServerError},
+	}
+	for _, testCase := range cases {
+		if got := httpStatus(testCase.err); got != testCase.want {
+			t.Fatalf("httpStatus(%v) = %d, want %d", testCase.err, got, testCase.want)
+		}
+	}
+}
+
+func serve(app *App, method string, path string) *httptest.ResponseRecorder {
+	response := httptest.NewRecorder()
+	app.Handler().ServeHTTP(response, httptest.NewRequest(method, path, nil))
+	return response
+}

@@ -724,3 +724,229 @@ func fixtureIndex(rootName string) *analyzer.Index {
 	}
 	return index
 }
+
+// TestCloseWorkspaceCancelsActiveAnalysis verifies close cancels work and
+// invalidates the workspace's views.
+func TestCloseWorkspaceCancelsActiveAnalysis(t *testing.T) {
+	started := make(chan struct{}, 2)
+	var blocking atomicFlag
+	analyze := func(ctx context.Context, _ analyzer.Config) (*analyzer.Index, error) {
+		started <- struct{}{}
+		if blocking.get() {
+			<-ctx.Done()
+			return nil, ctx.Err()
+		}
+		return fixtureIndex("sample.Root"), nil
+	}
+	harness := newHarness(t, Options{Analyze: analyze})
+	ctx := testContext(t)
+
+	opened, err := harness.client.OpenWorkspace(ctx, protocol.WorkspaceOpenParams{RootURI: protocol.FileURI(testRoot), Views: []protocol.ViewSpec{{Language: "go"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	viewID := opened.Views[0].ViewID
+	published := harness.publish(ctx, viewID)
+	<-started
+
+	blocking.set(true)
+	analysisID, err := harness.client.StartAnalysis(ctx, protocol.AnalysisStartParams{ViewID: viewID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-started
+
+	if err := harness.client.CloseWorkspace(ctx, opened.WorkspaceID); err != nil {
+		t.Fatal(err)
+	}
+	if failure := harness.awaitFailure(ctx, analysisID); failure.Kind != protocol.FailureCancelled {
+		t.Fatalf("failure after close = %#v", failure)
+	}
+
+	_, err = harness.client.GetSymbol(ctx, protocol.SymbolGetParams{SnapshotQuery: protocol.SnapshotQuery{ViewID: viewID, SnapshotID: published.SnapshotID}, SymbolID: "root"})
+	expectCode(t, err, protocol.CodeViewNotFound)
+	_, err = harness.client.StartAnalysis(ctx, protocol.AnalysisStartParams{ViewID: viewID})
+	expectCode(t, err, protocol.CodeViewNotFound)
+}
+
+// TestShutdownCancelsActiveAnalysis verifies shutdown does not wait for an
+// analysis to finish on its own.
+func TestShutdownCancelsActiveAnalysis(t *testing.T) {
+	started := make(chan struct{})
+	cancelled := make(chan struct{})
+	analyze := func(ctx context.Context, _ analyzer.Config) (*analyzer.Index, error) {
+		close(started)
+		<-ctx.Done()
+		close(cancelled)
+		return nil, ctx.Err()
+	}
+
+	ctx := testContext(t)
+	connection, err := StartInProcess(ctx, Options{Analyze: analyze}, protocol.PeerInfo{Name: "shutdown-test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	opened, err := connection.Client.OpenWorkspace(ctx, protocol.WorkspaceOpenParams{RootURI: protocol.FileURI(testRoot), Views: []protocol.ViewSpec{{Language: "go"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := connection.Client.StartAnalysis(ctx, protocol.AnalysisStartParams{ViewID: opened.Views[0].ViewID}); err != nil {
+		t.Fatal(err)
+	}
+	<-started
+
+	if err := connection.Close(ctx); err != nil {
+		t.Fatalf("Close() during analysis = %v", err)
+	}
+	select {
+	case <-cancelled:
+	case <-ctx.Done():
+		t.Fatal("shutdown did not cancel the active analysis")
+	}
+	select {
+	case <-connection.Client.Done():
+	case <-ctx.Done():
+		t.Fatal("engine stream stayed open after exit")
+	}
+}
+
+// TestChangesAndDiagnosticsPaginate verifies cursors for every pageable method.
+func TestChangesAndDiagnosticsPaginate(t *testing.T) {
+	harness := newHarness(t, Options{Analyze: staticAnalyze(bulkIndex(5, 3))})
+	ctx := testContext(t)
+	viewID := harness.openGo(ctx, nil)
+	published := harness.publish(ctx, viewID)
+	query := protocol.SnapshotQuery{ViewID: viewID, SnapshotID: published.SnapshotID}
+
+	changeIDs := []string{}
+	changeParams := protocol.ChangesListParams{SnapshotQuery: query, Page: &protocol.Page{Limit: 2}}
+	for pages := 0; ; pages++ {
+		page, err := harness.client.ListChanges(ctx, changeParams)
+		if err != nil || len(page.Items) > 2 || !page.GitState.Available {
+			t.Fatalf("changes page = %#v, %v", page, err)
+		}
+		for _, item := range page.Items {
+			changeIDs = append(changeIDs, item.SymbolID)
+		}
+		if page.NextCursor == "" {
+			if pages != 2 {
+				t.Fatalf("changes took %d extra pages, want 2", pages)
+			}
+			break
+		}
+		changeParams.Page.Cursor = page.NextCursor
+	}
+	if strings.Join(changeIDs, ",") != "fn-0,fn-1,fn-2,fn-3,fn-4" {
+		t.Fatalf("paged changes = %v (review order must be preserved)", changeIDs)
+	}
+
+	messages := []string{}
+	diagnosticParams := protocol.DiagnosticsListParams{SnapshotQuery: query, Page: &protocol.Page{Limit: 2}}
+	for {
+		page, err := harness.client.ListDiagnostics(ctx, diagnosticParams)
+		if err != nil || page.LoadReport.DiagnosticCount != 3 {
+			t.Fatalf("diagnostics page = %#v, %v", page, err)
+		}
+		for _, item := range page.Items {
+			messages = append(messages, item.Message)
+		}
+		if page.NextCursor == "" {
+			break
+		}
+		diagnosticParams.Page.Cursor = page.NextCursor
+	}
+	if strings.Join(messages, ",") != "problem 0,problem 1,problem 2" {
+		t.Fatalf("paged diagnostics = %v", messages)
+	}
+}
+
+// TestWireShapeUsesEmptyArraysAndOmitsUnavailableFields verifies the encoding
+// rules clients rely on: [] instead of null, and omitted optional fields.
+func TestWireShapeUsesEmptyArraysAndOmitsUnavailableFields(t *testing.T) {
+	index := fixtureIndex("sample.Root")
+	root := index.Functions["root"]
+	root.Contracts = []analyzer.Contract{{Name: "sample.Config", Kind: "struct", Fields: []analyzer.Field{{Name: "Root", Type: "string"}}}}
+	root.Parameters, root.Results = nil, nil
+	index.Functions["root"] = root
+	index.Git = analyzer.GitSnapshot{Available: false, Branch: "stale", Revision: "stale"}
+	index.LoadReport = analyzer.LoadReport{Language: "go"}
+
+	harness := newHarness(t, Options{Analyze: staticAnalyze(index)})
+	ctx := testContext(t)
+	viewID := harness.openGo(ctx, nil)
+	published := harness.publish(ctx, viewID)
+	query := protocol.SnapshotQuery{ViewID: viewID, SnapshotID: published.SnapshotID}
+
+	var symbolResult json.RawMessage
+	if err := harness.client.Call(ctx, protocol.MethodSymbolGet, protocol.SymbolGetParams{SnapshotQuery: query, SymbolID: "root"}, &symbolResult); err != nil {
+		t.Fatal(err)
+	}
+	encoded := string(symbolResult)
+	for _, expected := range []string{`"parameters":[]`, `"results":[]`, `"evidence":[]`, `"contracts":[{"name":"sample.Config","kind":"struct","fields":[{"name":"Root","type":"string"}],"methods":[]}]`} {
+		if !strings.Contains(encoded, expected) {
+			t.Fatalf("symbol/get omitted %s: %s", expected, encoded)
+		}
+	}
+	if strings.Contains(encoded, "null") {
+		t.Fatalf("symbol/get encoded null: %s", encoded)
+	}
+
+	var changesResult json.RawMessage
+	if err := harness.client.Call(ctx, protocol.MethodChangesList, protocol.ChangesListParams{SnapshotQuery: query}, &changesResult); err != nil {
+		t.Fatal(err)
+	}
+	if got := string(changesResult); got != `{"gitState":{"available":false,"detached":false},"items":[]}` {
+		t.Fatalf("unavailable Git encoding = %s", got)
+	}
+
+	var diagnosticsResult json.RawMessage
+	if err := harness.client.Call(ctx, protocol.MethodDiagnosticsList, protocol.DiagnosticsListParams{SnapshotQuery: query}, &diagnosticsResult); err != nil {
+		t.Fatal(err)
+	}
+	if got := string(diagnosticsResult); !strings.Contains(got, `"buildTags":[]`) || !strings.Contains(got, `"items":[]`) {
+		t.Fatalf("empty diagnostics encoding = %s", got)
+	}
+}
+
+// bulkIndex returns an index with changeCount changed functions in review
+// order and diagnosticCount load diagnostics.
+func bulkIndex(changeCount int, diagnosticCount int) *analyzer.Index {
+	index := &analyzer.Index{
+		Root:       testRoot,
+		Language:   "go",
+		Functions:  map[string]analyzer.Function{},
+		Outgoing:   map[string][]analyzer.Edge{},
+		Incoming:   map[string][]analyzer.Edge{},
+		Git:        analyzer.GitSnapshot{Available: true, Branch: "main"},
+		LoadReport: analyzer.LoadReport{Language: "go", TotalUnits: diagnosticCount + 1, FailedUnits: diagnosticCount},
+	}
+	for number := range changeCount {
+		id := fmt.Sprintf("fn-%d", number)
+		// Names sort opposite to review order so pagination must keep engine order.
+		name := fmt.Sprintf("sample.F%03d", changeCount-number)
+		index.Functions[id] = analyzer.Function{ID: id, QualifiedName: name, Package: "sample", File: testRoot + "/bulk.go", Line: number + 1, EndLine: number + 1, Change: &analyzer.FunctionChange{Kind: "new", Diff: "+x\n"}}
+		index.Git.ChangedFunctions = append(index.Git.ChangedFunctions, analyzer.ChangedFunction{ID: id, QualifiedName: name, Package: "sample", File: testRoot + "/bulk.go", Line: number + 1, Kind: "new"})
+	}
+	for number := range diagnosticCount {
+		index.LoadReport.Diagnostics = append(index.LoadReport.Diagnostics, analyzer.LoadDiagnostic{Kind: "type", Message: fmt.Sprintf("problem %d", number), Units: []string{fmt.Sprintf("unit-%d", number)}})
+	}
+	return index
+}
+
+// atomicFlag is a small concurrency-safe boolean for test fakes.
+type atomicFlag struct {
+	mu    sync.Mutex
+	value bool
+}
+
+func (flag *atomicFlag) get() bool {
+	flag.mu.Lock()
+	defer flag.mu.Unlock()
+	return flag.value
+}
+
+func (flag *atomicFlag) set(value bool) {
+	flag.mu.Lock()
+	defer flag.mu.Unlock()
+	flag.value = value
+}
