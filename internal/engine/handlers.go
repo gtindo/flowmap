@@ -14,6 +14,7 @@ import (
 func (engine *Engine) methods() map[string]methodHandler {
 	return map[string]methodHandler{
 		protocol.MethodWorkspaceOpen:     engine.handleWorkspaceOpen,
+		protocol.MethodWorkspaceGet:      engine.handleWorkspaceGet,
 		protocol.MethodWorkspaceClose:    engine.handleWorkspaceClose,
 		protocol.MethodAnalysisStart:     engine.handleAnalysisStart,
 		protocol.MethodAnalysisCancel:    engine.handleAnalysisCancel,
@@ -33,6 +34,16 @@ func (engine *Engine) handleWorkspaceOpen(_ context.Context, raw json.RawMessage
 	}
 
 	opened, err := engine.openWorkspace(params)
+	return handlerResult{value: opened, err: err}
+}
+
+func (engine *Engine) handleWorkspaceGet(_ context.Context, raw json.RawMessage) handlerResult {
+	var params protocol.WorkspaceGetParams
+	if err := decodeParams(raw, &params); err != nil {
+		return handlerResult{err: err}
+	}
+
+	opened, err := engine.getWorkspace(params)
 	return handlerResult{value: opened, err: err}
 }
 

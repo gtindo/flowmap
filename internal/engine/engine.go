@@ -90,11 +90,11 @@ type view struct {
 	emit sync.Mutex
 
 	// The remaining fields are guarded by Engine.mu.
-	closed    bool
-	active    *analysis
-	failed    bool
-	revision  int
-	snapshots []*snapshot
+	closed      bool
+	active      *analysis
+	lastFailure *protocol.Failure
+	revision    int
+	snapshots   []*snapshot
 }
 
 type snapshot struct {
@@ -234,11 +234,14 @@ func (engine *Engine) workspaceModel(opened *workspace) protocol.Workspace {
 func (languageView *view) loadState() protocol.LoadState {
 	state := protocol.LoadState{State: protocol.LoadStateUnscanned}
 	if current := languageView.current(); current != nil {
+		descriptor := current.descriptor
 		state.State = protocol.LoadStateReady
-		state.CurrentSnapshotID = current.descriptor.SnapshotID
+		state.CurrentSnapshot = &descriptor
 	}
-	if languageView.failed {
+	if languageView.lastFailure != nil {
+		failure := *languageView.lastFailure
 		state.State = protocol.LoadStateFailed
+		state.Failure = &failure
 	}
 	if languageView.active != nil {
 		state.State = protocol.LoadStateAnalyzing
@@ -254,13 +257,24 @@ func (languageView *view) current() *snapshot {
 	return languageView.snapshots[len(languageView.snapshots)-1]
 }
 
+func (engine *Engine) getWorkspace(params protocol.WorkspaceGetParams) (protocol.Workspace, *protocol.Error) {
+	engine.mu.Lock()
+	defer engine.mu.Unlock()
+
+	opened := engine.workspaces[params.WorkspaceID]
+	if opened == nil {
+		return protocol.Workspace{}, workspaceNotFound(params.WorkspaceID)
+	}
+	return engine.workspaceModel(opened), nil
+}
+
 func (engine *Engine) closeWorkspace(params protocol.WorkspaceCloseParams) *protocol.Error {
 	engine.mu.Lock()
 	defer engine.mu.Unlock()
 
 	opened := engine.workspaces[params.WorkspaceID]
 	if opened == nil {
-		return protocol.NewError(protocol.CodeWorkspaceNotFound, "workspace not found", map[string]any{"workspaceId": params.WorkspaceID})
+		return workspaceNotFound(params.WorkspaceID)
 	}
 
 	engine.closeWorkspaceLocked(opened)
@@ -389,16 +403,17 @@ func (engine *Engine) commit(started *analysis, index *analyzer.Index, analyzeEr
 		return protocol.Snapshot{}, &protocol.Failure{Kind: protocol.FailureCancelled, Message: "analysis was cancelled"}
 	}
 	if analyzeErr != nil {
-		languageView.failed = true
 		kind := protocol.FailureLoadFailed
 		var internal *internalFailure
 		if errors.As(analyzeErr, &internal) {
 			kind = protocol.FailureInternal
 		}
-		return protocol.Snapshot{}, &protocol.Failure{Kind: kind, Message: analyzeErr.Error()}
+		failure := protocol.Failure{Kind: kind, Message: analyzeErr.Error()}
+		languageView.lastFailure = &failure
+		return protocol.Snapshot{}, &failure
 	}
 
-	languageView.failed = false
+	languageView.lastFailure = nil
 	languageView.revision++
 	published := &snapshot{
 		index: index,
@@ -450,6 +465,10 @@ func (engine *Engine) resolveSnapshot(query protocol.SnapshotQuery) (*snapshot, 
 	}
 
 	return nil, "", protocol.NewError(protocol.CodeSnapshotUnavailable, "snapshot is unavailable for this view", map[string]any{"viewId": query.ViewID, "snapshotId": query.SnapshotID})
+}
+
+func workspaceNotFound(workspaceID string) *protocol.Error {
+	return protocol.NewError(protocol.CodeWorkspaceNotFound, "workspace not found", map[string]any{"workspaceId": workspaceID})
 }
 
 func viewNotFound(viewID string) *protocol.Error {

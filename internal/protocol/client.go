@@ -165,6 +165,13 @@ func (client *Client) OpenWorkspace(ctx context.Context, params WorkspaceOpenPar
 	return result, err
 }
 
+// GetWorkspace returns a workspace and the current load state of its views.
+func (client *Client) GetWorkspace(ctx context.Context, workspaceID string) (Workspace, error) {
+	var result Workspace
+	err := client.Call(ctx, MethodWorkspaceGet, WorkspaceGetParams{WorkspaceID: workspaceID}, &result)
+	return result, err
+}
+
 // CloseWorkspace closes a workspace and evicts its snapshots.
 func (client *Client) CloseWorkspace(ctx context.Context, workspaceID string) error {
 	return client.Call(ctx, MethodWorkspaceClose, WorkspaceCloseParams{WorkspaceID: workspaceID}, nil)

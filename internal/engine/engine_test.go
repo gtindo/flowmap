@@ -950,3 +950,114 @@ func (flag *atomicFlag) set(value bool) {
 	defer flag.mu.Unlock()
 	flag.value = value
 }
+
+// TestWorkspaceGetReportsEveryLoadState verifies a client can recover view
+// state without having observed the notifications that produced it.
+func TestWorkspaceGetReportsEveryLoadState(t *testing.T) {
+	type step struct {
+		err   error
+		block bool
+	}
+	steps := make(chan step, 8)
+	started := make(chan struct{}, 8)
+	analyze := func(ctx context.Context, _ analyzer.Config) (*analyzer.Index, error) {
+		current := <-steps
+		started <- struct{}{}
+		if current.block {
+			<-ctx.Done()
+			return nil, ctx.Err()
+		}
+		if current.err != nil {
+			return nil, current.err
+		}
+		return fixtureIndex("sample.Root"), nil
+	}
+	harness := newHarness(t, Options{Analyze: analyze})
+	ctx := testContext(t)
+
+	opened, err := harness.client.OpenWorkspace(ctx, protocol.WorkspaceOpenParams{RootURI: protocol.FileURI(testRoot), Views: []protocol.ViewSpec{{Language: "go"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	viewID := opened.Views[0].ViewID
+	state := func() protocol.LoadState {
+		t.Helper()
+		workspace, err := harness.client.GetWorkspace(ctx, opened.WorkspaceID)
+		if err != nil || len(workspace.Views) != 1 || workspace.Views[0].ViewID != viewID || workspace.RootURI != opened.RootURI {
+			t.Fatalf("workspace/get = %#v, %v", workspace, err)
+		}
+		return workspace.Views[0].LoadState
+	}
+
+	if current := state(); current.State != protocol.LoadStateUnscanned || current.CurrentSnapshot != nil || current.Failure != nil || current.AnalysisID != "" {
+		t.Fatalf("initial state = %#v", current)
+	}
+
+	steps <- step{block: true}
+	first, err := harness.client.StartAnalysis(ctx, protocol.AnalysisStartParams{ViewID: viewID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-started
+	if current := state(); current.State != protocol.LoadStateAnalyzing || current.AnalysisID != first || current.CurrentSnapshot != nil {
+		t.Fatalf("first analysis state = %#v", current)
+	}
+	if _, err := harness.client.CancelAnalysis(ctx, first); err != nil {
+		t.Fatal(err)
+	}
+	harness.awaitFailure(ctx, first)
+	if current := state(); current.State != protocol.LoadStateUnscanned || current.Failure != nil {
+		t.Fatalf("state after cancelling first analysis = %#v", current)
+	}
+
+	steps <- step{}
+	published := harness.publish(ctx, viewID)
+	<-started
+	if current := state(); current.State != protocol.LoadStateReady || current.CurrentSnapshot == nil || *current.CurrentSnapshot != published {
+		t.Fatalf("ready state = %#v, want snapshot %#v", current, published)
+	}
+
+	steps <- step{err: fmt.Errorf("broken source")}
+	failed, err := harness.client.StartAnalysis(ctx, protocol.AnalysisStartParams{ViewID: viewID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-started
+	harness.awaitFailure(ctx, failed)
+	current := state()
+	if current.State != protocol.LoadStateFailed || current.Failure == nil || current.Failure.Kind != protocol.FailureLoadFailed || current.Failure.Message != "broken source" || current.CurrentSnapshot == nil || current.CurrentSnapshot.SnapshotID != published.SnapshotID {
+		t.Fatalf("failed state = %#v", current)
+	}
+
+	steps <- step{block: true}
+	running, err := harness.client.StartAnalysis(ctx, protocol.AnalysisStartParams{ViewID: viewID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-started
+	if current := state(); current.State != protocol.LoadStateAnalyzing || current.AnalysisID != running || current.CurrentSnapshot == nil || current.Failure == nil {
+		t.Fatalf("analyzing after failure = %#v", current)
+	}
+	if _, err := harness.client.CancelAnalysis(ctx, running); err != nil {
+		t.Fatal(err)
+	}
+	harness.awaitFailure(ctx, running)
+	if current := state(); current.State != protocol.LoadStateFailed || current.Failure.Message != "broken source" {
+		t.Fatalf("cancellation changed the failed state: %#v", current)
+	}
+
+	steps <- step{}
+	republished := harness.publish(ctx, viewID)
+	<-started
+	if current := state(); current.State != protocol.LoadStateReady || current.Failure != nil || current.CurrentSnapshot.Revision != 2 || current.CurrentSnapshot.SnapshotID != republished.SnapshotID {
+		t.Fatalf("recovered state = %#v", current)
+	}
+
+	_, err = harness.client.GetWorkspace(ctx, "workspace-unknown")
+	expectCode(t, err, protocol.CodeWorkspaceNotFound)
+	if err := harness.client.CloseWorkspace(ctx, opened.WorkspaceID); err != nil {
+		t.Fatal(err)
+	}
+	_, err = harness.client.GetWorkspace(ctx, opened.WorkspaceID)
+	expectCode(t, err, protocol.CodeWorkspaceNotFound)
+}

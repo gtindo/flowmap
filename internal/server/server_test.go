@@ -261,6 +261,9 @@ func TestRescanAtomicallyReplacesIndexAndRejectsOverlap(t *testing.T) {
 	if oldSearch.Code != http.StatusOK || !strings.Contains(oldSearch.Body.String(), "sample.Root") {
 		t.Fatalf("old index unavailable during rescan: %d %s", oldSearch.Code, oldSearch.Body.String())
 	}
+	if projects := serve(app, http.MethodGet, "/api/projects"); !strings.Contains(projects.Body.String(), `"status":"loading","function_count":2`) {
+		t.Fatalf("projects during rescan = %s", projects.Body.String())
+	}
 	overlap := httptest.NewRecorder()
 	app.Handler().ServeHTTP(overlap, httptest.NewRequest(http.MethodPost, "/api/rescan", nil))
 	if overlap.Code != http.StatusConflict {

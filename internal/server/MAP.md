@@ -2,13 +2,13 @@
 
 ## Responsibility
 
-This package is the HTTP adapter over the Flowmap engine protocol and the reference protocol client. It opens one engine workspace per configured project, mirrors view state from engine notifications, translates browser requests into snapshot-addressed protocol queries, and translates protocol models back into the browser's snake_case, path-based JSON. It also owns API routing, embedded static assets, OpenTelemetry HTTP handler wrapping, request logs, and graceful network lifecycle. It holds no analysis indexes.
+This package is the HTTP adapter over the Flowmap engine protocol and the reference protocol client. It opens one engine workspace per configured project, reads view state from the engine with `workspace/get` (caching none of it), translates browser requests into snapshot-addressed protocol queries, and translates protocol models back into the browser's snake_case, path-based JSON. It also owns API routing, embedded static assets, OpenTelemetry HTTP handler wrapping, request logs, and graceful network lifecycle. It holds no analysis indexes.
 
 ## Files
 
 | File | Responsibility |
 |---|---|
-| `server.go` | `App`, workspace opening, routes, OpenTelemetry HTTP wrapping, request logging, project-scoped handlers, `Scan` (start analysis and await its notification), notification-driven view state, paging helpers, and protocol-error to HTTP-status mapping |
+| `server.go` | `App`, workspace opening, routes, OpenTelemetry HTTP wrapping, request logging, project-scoped handlers, `Scan` (start analysis and await its notification), `workspace/get`-backed view state and status mapping, paging helpers, and protocol-error to HTTP-status mapping |
 | `convert.go` | Pure protocol → browser model translation (URIs to paths, camelCase to the `analyzer` JSON models, load reports for CLI warnings) |
 | `server_test.go` | API, static asset, rescan, concurrency, summary, and error-mapping coverage against a real in-process engine session |
 | `static/index.html` | Workbench document structure and controls |
@@ -34,7 +34,7 @@ POST /api/rescan
 GET  /*                              embedded static workbench
 ```
 
-Handlers resolve a project and language from `project=<name>&language=<language>` to an engine view and its current snapshot id, then issue `symbol/search`, `graph/neighborhood`, `symbol/get`, `changes/list`, or `symbol/summary`. A single-language project resolves omitted names for backwards compatibility. The adapter keeps the HTTP API's historical coercion of graph depth and direction because the protocol rejects invalid values. JSON errors use a small `{ "error": ... }` envelope. The returned handler is wrapped with OpenTelemetry HTTP instrumentation and telemetry-enabled structured request logging.
+Handlers resolve a project and language from `project=<name>&language=<language>` to an engine view, read its current snapshot from `workspace/get`, then issue `symbol/search`, `graph/neighborhood`, `symbol/get`, `changes/list`, or `symbol/summary`. A single-language project resolves omitted names for backwards compatibility. The adapter keeps the HTTP API's historical coercion of graph depth and direction because the protocol rejects invalid values. JSON errors use a small `{ "error": ... }` envelope. The returned handler is wrapped with OpenTelemetry HTTP instrumentation and telemetry-enabled structured request logging.
 
 ## Rescan Flow
 
@@ -46,7 +46,7 @@ POST /api/projects/{name}/scan or POST /api/rescan?project={name}
   -> return function count, load report, and Git snapshot
 ```
 
-The engine permits one analysis per view. Registry projects start unscanned, and a failed scan is isolated to that view while its previous snapshot stays queryable. Notifications can arrive before `Scan` begins waiting, so terminal outcomes are buffered by analysis id.
+The engine permits one analysis per view. Registry projects start unscanned, and a failed scan is isolated to that view while its previous snapshot stays queryable. Notifications can arrive before `Scan` begins waiting, so terminal outcomes are buffered by analysis id. Notifications only wake scan waiters; `/api/projects` status comes from `workspace/get`.
 
 ## Summary Flow
 
