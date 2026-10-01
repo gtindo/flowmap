@@ -10,17 +10,16 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/gtindo/flowmap/internal/analyzer"
+	"github.com/gtindo/flowmap/internal/engine"
+	"github.com/gtindo/flowmap/internal/protocol"
 )
 
 // TestHandlerServesSearchGraphAndDetails verifies the browser API boundaries.
 func TestHandlerServesSearchGraphAndDetails(t *testing.T) {
-	index := fixtureIndex()
-	app, err := New(index, nil, nil)
-	if err != nil {
-		t.Fatalf("New() error = %v", err)
-	}
+	app := newScannedApp(t, fixtureIndex(), engine.Options{})
 	for _, path := range []string{"/api/search?q=Root", "/api/graph?root=root&direction=downstream&depth=1", "/api/functions/root", "/api/git-status"} {
 		response := httptest.NewRecorder()
 		app.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, path, nil))
@@ -53,7 +52,7 @@ func TestHandlerServesSearchGraphAndDetails(t *testing.T) {
 
 // TestHandlerServesNavigableGraphViews verifies both interactive workbench modes.
 func TestHandlerServesNavigableGraphViews(t *testing.T) {
-	app, _ := New(fixtureIndex(), nil, nil)
+	app := newScannedApp(t, fixtureIndex(), engine.Options{})
 	pageResponse := httptest.NewRecorder()
 	app.Handler().ServeHTTP(pageResponse, httptest.NewRequest(http.MethodGet, "/", nil))
 	page := pageResponse.Body.String()
@@ -116,7 +115,7 @@ func TestHandlerServesNavigableGraphViews(t *testing.T) {
 }
 
 func TestHandlerServesPersistentSystemAwareThemes(t *testing.T) {
-	app, _ := New(fixtureIndex(), nil, nil)
+	app := newScannedApp(t, fixtureIndex(), engine.Options{})
 	pageResponse := httptest.NewRecorder()
 	app.Handler().ServeHTTP(pageResponse, httptest.NewRequest(http.MethodGet, "/", nil))
 	page := pageResponse.Body.String()
@@ -137,7 +136,7 @@ func TestHandlerServesPersistentSystemAwareThemes(t *testing.T) {
 }
 
 func TestHandlerServesInstallablePWA(t *testing.T) {
-	app, _ := New(fixtureIndex(), nil, nil)
+	app := newScannedApp(t, fixtureIndex(), engine.Options{})
 	handler := app.Handler()
 
 	pageResponse := httptest.NewRecorder()
@@ -235,18 +234,19 @@ func TestRescanAtomicallyReplacesIndexAndRejectsOverlap(t *testing.T) {
 	var calls atomic.Int32
 	config := analyzer.Config{Root: "/work/project", BuildTags: []string{"integration"}}
 	replacement := fixtureIndexWithRoot("replacement", "sample.Replacement")
-	app, err := newApp(fixtureIndex(), nil, nil, config, func(_ context.Context, actual analyzer.Config) (*analyzer.Index, error) {
+	analyze := func(_ context.Context, actual analyzer.Config) (*analyzer.Index, error) {
 		if actual.Root != config.Root || len(actual.BuildTags) != 1 || actual.BuildTags[0] != "integration" {
 			return nil, fmt.Errorf("unexpected analyzer config: %#v", actual)
 		}
-		calls.Add(1)
+		if calls.Add(1) == 1 {
+			return fixtureIndex(), nil
+		}
 		close(started)
 		<-release
 		return replacement, nil
-	})
-	if err != nil {
-		t.Fatal(err)
 	}
+	app := newTestApp(t, []ProjectConfig{{Name: DefaultProjectName, Analysis: config}}, engine.Options{Analyze: analyze})
+	scanAll(t, app)
 
 	done := make(chan *httptest.ResponseRecorder, 1)
 	go func() {
@@ -274,18 +274,22 @@ func TestRescanAtomicallyReplacesIndexAndRejectsOverlap(t *testing.T) {
 	}
 	newSearch := httptest.NewRecorder()
 	app.Handler().ServeHTTP(newSearch, httptest.NewRequest(http.MethodGet, "/api/search?q=Replacement", nil))
-	if newSearch.Code != http.StatusOK || !strings.Contains(newSearch.Body.String(), "sample.Replacement") || calls.Load() != 1 {
+	if newSearch.Code != http.StatusOK || !strings.Contains(newSearch.Body.String(), "sample.Replacement") || calls.Load() != 2 {
 		t.Fatalf("replacement index not installed: %d %s calls=%d", newSearch.Code, newSearch.Body.String(), calls.Load())
 	}
 }
 
 func TestFailedRescanKeepsPreviousIndex(t *testing.T) {
-	app, err := newApp(fixtureIndex(), nil, nil, analyzer.Config{Root: "/work/project"}, func(context.Context, analyzer.Config) (*analyzer.Index, error) {
+	var calls atomic.Int32
+	analyze := func(context.Context, analyzer.Config) (*analyzer.Index, error) {
+		if calls.Add(1) == 1 {
+			return fixtureIndex(), nil
+		}
 		return nil, fmt.Errorf("broken source")
-	})
-	if err != nil {
-		t.Fatal(err)
 	}
+	app := newTestApp(t, []ProjectConfig{{Name: DefaultProjectName, Analysis: analyzer.Config{Root: "/work/project"}}}, engine.Options{Analyze: analyze})
+	scanAll(t, app)
+
 	response := httptest.NewRecorder()
 	app.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/rescan", nil))
 	if response.Code != http.StatusInternalServerError || !strings.Contains(response.Body.String(), "broken source") {
@@ -303,42 +307,28 @@ func TestFailedRescanKeepsPreviousIndex(t *testing.T) {
 	}
 }
 
-// TestCommandSummarizerAndContentCache verifies opt-in generation and source-hash invalidation.
-func TestCommandSummarizerAndContentCache(t *testing.T) {
-	summarizer := CommandSummarizer{Command: "printf \"{\\\"summary\\\":\\\"generated intent\\\"}\""}
-	request := SummaryRequest{QualifiedName: "sample.Root", Signature: "func()", Source: "one"}
-	summary, err := summarizer.Summarize(context.Background(), request)
-	if err != nil || summary != "generated intent" {
-		t.Fatalf("Summarize() = %q, %v", summary, err)
-	}
-	cache := &SummaryCache{directory: t.TempDir()}
-	if err := cache.Put(summarizer.Identity(), request, summary); err != nil {
-		t.Fatalf("Put() error = %v", err)
-	}
-	if cached, ok := cache.Get(summarizer.Identity(), request); !ok || cached != summary {
-		t.Fatalf("Get() = %q, %t", cached, ok)
-	}
-	request.Source = "two"
-	if _, ok := cache.Get(summarizer.Identity(), request); ok {
-		t.Fatal("changed source reused stale summary")
-	}
-	if _, err := (CommandSummarizer{Command: "false"}).Summarize(context.Background(), request); err == nil {
-		t.Fatal("provider failure was not returned")
-	}
-}
-
 // TestSummaryEndpointMarksGeneratedIntent verifies the successful API envelope.
 func TestSummaryEndpointMarksGeneratedIntent(t *testing.T) {
-	cache := &SummaryCache{directory: t.TempDir()}
-	app, _ := New(fixtureIndex(), CommandSummarizer{Command: "printf \"{\\\"summary\\\":\\\"intent\\\"}\""}, cache)
+	cache, err := engine.NewSummaryCacheIn(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := newScannedApp(t, fixtureIndex(), engine.Options{Summarizer: engine.CommandSummarizer{Command: "printf \"{\\\"summary\\\":\\\"intent\\\"}\""}, SummaryCache: cache})
 	response := httptest.NewRecorder()
 	app.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/functions/root/summary", strings.NewReader("")))
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d body = %s", response.Code, response.Body.String())
 	}
-	var result SummaryResult
-	if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil || result.Source != "generated" {
+	var result protocol.SymbolSummaryResult
+	if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil || result.Source != "generated" || result.Summary != "intent" {
 		t.Fatalf("result = %#v, %v", result, err)
+	}
+
+	failing := newScannedApp(t, fixtureIndex(), engine.Options{Summarizer: engine.CommandSummarizer{Command: "false"}, SummaryCache: cache})
+	failed := httptest.NewRecorder()
+	failing.Handler().ServeHTTP(failed, httptest.NewRequest(http.MethodPost, "/api/functions/root/summary", nil))
+	if failed.Code != http.StatusBadGateway {
+		t.Fatalf("provider failure status = %d body = %s", failed.Code, failed.Body.String())
 	}
 }
 
@@ -347,15 +337,12 @@ func TestProjectsScanLazilyAndKeepFailuresIsolated(t *testing.T) {
 		{Name: "good", Analysis: analyzer.Config{Root: "/work/good"}},
 		{Name: "bad", Analysis: analyzer.Config{Root: "/work/bad"}},
 	}
-	app, err := newRegistry(configs, nil, nil, nil, func(_ context.Context, config analyzer.Config) (*analyzer.Index, error) {
+	app := newTestApp(t, configs, engine.Options{Analyze: func(_ context.Context, config analyzer.Config) (*analyzer.Index, error) {
 		if config.Root == "/work/bad" {
 			return nil, fmt.Errorf("broken source")
 		}
 		return fixtureIndex(), nil
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	}})
 
 	projects := httptest.NewRecorder()
 	app.Handler().ServeHTTP(projects, httptest.NewRequest(http.MethodGet, "/api/projects", nil))
@@ -380,12 +367,104 @@ func TestProjectsScanLazilyAndKeepFailuresIsolated(t *testing.T) {
 	if search.Code != http.StatusOK || !strings.Contains(search.Body.String(), "sample.Root") {
 		t.Fatalf("good project unavailable after bad scan: %d %s", search.Code, search.Body.String())
 	}
+
+	failedProjects := httptest.NewRecorder()
+	app.Handler().ServeHTTP(failedProjects, httptest.NewRequest(http.MethodGet, "/api/projects", nil))
+	if !strings.Contains(failedProjects.Body.String(), `"status":"failed","error":"broken source"`) || !strings.Contains(failedProjects.Body.String(), `"function_count":2`) {
+		t.Fatalf("projects after scans = %s", failedProjects.Body.String())
+	}
+}
+
+func TestRescanReturnsLoadReportThroughEngine(t *testing.T) {
+	index := fixtureIndex()
+	index.LoadReport = analyzer.LoadReport{Root: "/work/project", Language: "go", BuildTags: []string{"integration"}, TotalPackageVariants: 3, FailedPackageVariants: 1, TotalUnits: 3, FailedUnits: 1, Diagnostics: []analyzer.LoadDiagnostic{
+		{Kind: "type", Position: "broken/broken.go:3:9", Message: "undefined: missing", Packages: []string{"example.com/broken"}, Units: []string{"example.com/broken"}},
+	}}
+	app := newTestApp(t, []ProjectConfig{{Name: DefaultProjectName, Analysis: analyzer.Config{Root: "/work/project", BuildTags: []string{"integration"}}}}, engine.Options{Analyze: func(context.Context, analyzer.Config) (*analyzer.Index, error) { return index, nil }})
+
+	result, err := app.Scan(testContext(t), "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	report := result.LoadReport
+	if !report.HasFailures() || report.FailedPackageVariants != 1 || len(report.Diagnostics) != 1 || report.Diagnostics[0].Position != "broken/broken.go:3" || report.Diagnostics[0].Packages[0] != "example.com/broken" {
+		t.Fatalf("load report = %#v", report)
+	}
+	if !strings.Contains(report.String(), "go -C '/work/project' test -tags='integration' ./...") {
+		t.Fatalf("rendered report = %s", report.String())
+	}
+	if result.GitStatus.Revision != "1234567890" || len(result.GitStatus.ChangedFunctions) != 1 || result.GitStatus.ChangedFunctions[0].File != "/work/sample.go" {
+		t.Fatalf("Git status = %#v", result.GitStatus)
+	}
+}
+
+func TestUnscannedAndUnknownResourcesReturnNotFound(t *testing.T) {
+	app := newTestApp(t, []ProjectConfig{{Name: "only", Analysis: analyzer.Config{Root: "/work/project"}}}, engine.Options{})
+	for _, path := range []string{"/api/search?q=x", "/api/search?project=missing", "/api/functions/root"} {
+		response := httptest.NewRecorder()
+		app.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, path, nil))
+		if response.Code != http.StatusNotFound {
+			t.Fatalf("GET %s status = %d body = %s", path, response.Code, response.Body.String())
+		}
+	}
+}
+
+// newTestApp starts an in-process engine session and opens the projects.
+func newTestApp(t *testing.T, configs []ProjectConfig, options engine.Options) *App {
+	t.Helper()
+
+	ctx := testContext(t)
+	connection, err := engine.StartInProcess(ctx, options, protocol.PeerInfo{Name: "server-test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		closeContext, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := connection.Close(closeContext); err != nil {
+			t.Errorf("close engine: %v", err)
+		}
+	})
+
+	app, err := New(ctx, connection.Client, configs)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	return app
+}
+
+// newScannedApp serves one default project whose engine publishes index.
+func newScannedApp(t *testing.T, index *analyzer.Index, options engine.Options) *App {
+	t.Helper()
+
+	options.Analyze = func(context.Context, analyzer.Config) (*analyzer.Index, error) { return index, nil }
+	app := newTestApp(t, []ProjectConfig{{Name: DefaultProjectName, Analysis: analyzer.Config{Root: "/work/project"}}}, options)
+	scanAll(t, app)
+	return app
+}
+
+func scanAll(t *testing.T, app *App) {
+	t.Helper()
+
+	for _, name := range app.projectList {
+		for _, language := range app.projects[name].list {
+			if _, err := app.Scan(testContext(t), name, language); err != nil {
+				t.Fatalf("Scan(%s, %s) = %v", name, language, err)
+			}
+		}
+	}
+}
+
+func testContext(t *testing.T) context.Context {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	t.Cleanup(cancel)
+	return ctx
 }
 
 // fixtureIndex returns a minimal immutable graph for HTTP tests.
 func fixtureIndex() *analyzer.Index {
 	root := analyzer.Function{ID: "root", QualifiedName: "sample.Root", Package: "sample", File: "/work/sample.go", Line: 10, Public: true, Classification: analyzer.Classification{Kind: "pure"}, Change: &analyzer.FunctionChange{Kind: "updated", Diff: "--- a/sample.go\n+++ b/sample.go\n@@ -1 +1 @@\n-old\n+new\n"}}
-	child := analyzer.Function{ID: "child", Name: "Root$1", QualifiedName: "sample.Root$1", Package: "sample", Anonymous: true, Classification: analyzer.Classification{Kind: "unknown"}}
+	child := analyzer.Function{ID: "child", Name: "Root$1", QualifiedName: "sample.Root$1", Package: "sample", File: "/work/sample.go", Line: 12, Anonymous: true, Classification: analyzer.Classification{Kind: "unknown"}}
 	edge := analyzer.Edge{CallerID: "root", CalleeID: "child", Kind: "call"}
 	gitStatus := analyzer.GitSnapshot{Available: true, Branch: "main", Revision: "1234567890", ChangedFunctions: []analyzer.ChangedFunction{{ID: "root", QualifiedName: "sample.Root", Package: "sample", File: root.File, Line: root.Line, Kind: "updated", LeafDescendantCount: 2}}}
 	return &analyzer.Index{Functions: map[string]analyzer.Function{"root": root, "child": child}, Edges: []analyzer.Edge{edge}, Outgoing: map[string][]analyzer.Edge{"root": {edge}}, Incoming: map[string][]analyzer.Edge{"child": {edge}}, Git: gitStatus}

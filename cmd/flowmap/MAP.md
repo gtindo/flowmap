@@ -2,28 +2,34 @@
 
 ## Responsibility
 
-This package is Flowmap's executable shell. It translates command-line input into analyzer and server configuration, owns process-level cancellation and error reporting, and starts the local workbench.
+This package is Flowmap's executable shell. It translates command-line input into engine and server configuration, owns process-level cancellation and error reporting, starts the local workbench over an in-process engine session, and runs the stdio engine for editor integrations.
 
 ## Files
 
 | File | Responsibility |
 |---|---|
-| `main.go` | `serve`/`engine`/`version` dispatch, stdio engine sessions, path or JSON registry parsing, optional telemetry setup, initial/lazy analysis wiring, optional summarizer setup, interrupt handling, and HTTP startup |
-| `main_test.go` | CLI parsing, build-tag normalization, warning output, and command behavior coverage |
+| `main.go` | `serve`/`engine`/`version` dispatch, path or JSON registry parsing, optional telemetry setup, engine options and summarizer setup, in-process engine start/close, eager or lazy scans through the server adapter, interrupt handling, and HTTP startup |
+| `main_test.go` | CLI parsing, build-tag normalization, warning output, and a real Go analysis driven through `flowmap engine` over stdio pipes |
 
 ## Startup Flow
 
 ```text
 main
   -> run
-  -> parse serve flags and module path or `--config` registry, then detect configured Go and/or JavaScript language views
-  -> signal.NotifyContext
-  -> telemetry.Setup when OTLP environment configuration is present
-  -> analyzer.Analyze for legacy one-project mode, or server.NewProjects for lazy registry scans
-  -> report non-fatal package load failures
-  -> optionally create CommandSummarizer and SummaryCache
-  -> server.NewRescannable
-  -> App.Listen
+  -> serve:
+       parse flags and module path or `--config` registry, then detect configured Go and/or JavaScript language views
+       -> signal.NotifyContext
+       -> telemetry.Setup when OTLP environment configuration is present
+       -> engine options (optional CommandSummarizer and SummaryCache)
+       -> engine.StartInProcess (initialized protocol client)
+       -> server.New (one workspace per project)
+       -> legacy one-project mode: App.Scan each language eagerly and report non-fatal load failures
+       -> App.Listen
+       -> protocol shutdown/exit with a bounded timeout
+  -> engine:
+       parse `--summarizer-command`
+       -> telemetry.Setup writing to stderr
+       -> engine.New(...).Serve(stdin, stdout); diagnostics go to stderr
 ```
 
 `version` prints the build-time version. Release builds replace the default `dev` value through linker flags in the root `Makefile`.

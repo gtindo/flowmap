@@ -78,7 +78,17 @@ GET  /api/git-status
 POST /api/rescan?project=<name>
 ```
 
-All project data endpoints accept `project=<name>` in multi-project mode. Legacy one-project requests continue to work without it.
+All project data endpoints accept `project=<name>` in multi-project mode. Legacy one-project requests continue to work without it. The HTTP API is an adapter over the engine protocol below.
+
+## Engine Protocol (Experimental)
+
+Editor and IDE integrations talk to Flowmap through a UI-independent JSON-RPC 2.0 protocol over stdin/stdout, specified in [`docs/tdd/0001-flowmap-engine-protocol.md`](docs/tdd/0001-flowmap-engine-protocol.md):
+
+```sh
+flowmap engine [--summarizer-command command]
+```
+
+Messages use `Content-Length` framing. A client initializes protocol version `"0"`, opens a workspace with one view per language, starts an analysis, waits for `analysis/published`, and queries that snapshot by `viewId` and `snapshotId`. Version `0` is unstable and requires an exact version match. The browser workbench uses the same protocol through an in-process connection.
 
 ## Development
 

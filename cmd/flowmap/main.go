@@ -12,14 +12,22 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/gtindo/flowmap/internal/analyzer"
 	"github.com/gtindo/flowmap/internal/engine"
+	"github.com/gtindo/flowmap/internal/protocol"
 	"github.com/gtindo/flowmap/internal/server"
 	"github.com/gtindo/flowmap/internal/telemetry"
 )
 
 const defaultAddress = "127.0.0.1:7878"
+
+// webAdapterName identifies the embedded workbench adapter to the engine.
+const webAdapterName = "flowmap-web-adapter"
+
+// engineCloseTimeout bounds the protocol shutdown after the server stops.
+const engineCloseTimeout = 5 * time.Second
 
 // version is replaced at release build time and remains dev for local builds.
 var version = "dev"
@@ -93,15 +101,16 @@ func run(arguments []string) error {
 		slog.InfoContext(ctx, "flowmap telemetry initialized", "version", version)
 	}
 
-	var summarizer server.Summarizer
-	var cache *server.SummaryCache
-	if strings.TrimSpace(*summarizerCommand) != "" {
-		summarizer = server.CommandSummarizer{Command: *summarizerCommand}
-		cache, err = server.NewSummaryCache()
-		if err != nil {
-			return err
-		}
+	engineOptions, err := newEngineOptions(*summarizerCommand, slog.Default())
+	if err != nil {
+		return err
 	}
+
+	connection, err := engine.StartInProcess(ctx, engineOptions, protocol.PeerInfo{Name: webAdapterName, Version: version})
+	if err != nil {
+		return err
+	}
+	defer closeEngine(connection)
 
 	if strings.TrimSpace(*configPath) != "" {
 		projects, err := loadProjects(*configPath)
@@ -109,7 +118,7 @@ func run(arguments []string) error {
 			return err
 		}
 
-		app, err := server.NewProjects(projects, summarizer, cache)
+		app, err := server.New(ctx, connection.Client, projects)
 		if err != nil {
 			return err
 		}
@@ -123,20 +132,20 @@ func run(arguments []string) error {
 	if err != nil {
 		return err
 	}
-	indexes := make(map[string]*analyzer.Index, len(analysisConfigs))
-	functionCount := 0
-	for _, analysisConfig := range analysisConfigs {
-		index, analyzeErr := analyzer.Analyze(ctx, analysisConfig)
-		if analyzeErr != nil {
-			return analyzeErr
-		}
-		writeLoadWarning(os.Stderr, index.LoadReport)
-		indexes[analysisConfig.Language] = index
-		functionCount += len(index.Functions)
-	}
-	app, err := server.NewRescannableLanguages(indexes, summarizer, cache, analysisConfigs)
+
+	app, err := server.New(ctx, connection.Client, []server.ProjectConfig{{Name: server.DefaultProjectName, Analyses: analysisConfigs}})
 	if err != nil {
 		return err
+	}
+
+	functionCount := 0
+	for _, analysisConfig := range analysisConfigs {
+		result, scanErr := app.Scan(ctx, server.DefaultProjectName, analysisConfig.Language)
+		if scanErr != nil {
+			return scanErr
+		}
+		writeLoadWarning(os.Stderr, result.LoadReport)
+		functionCount += result.FunctionCount
 	}
 
 	fmt.Printf("Flowmap indexed %d functions across %d language views. Open http://%s\n", functionCount, len(analysisConfigs), *address)
@@ -192,6 +201,16 @@ func newEngineOptions(summarizerCommand string, logger *slog.Logger) (engine.Opt
 	options.Summarizer = engine.CommandSummarizer{Command: summarizerCommand}
 	options.SummaryCache = cache
 	return options, nil
+}
+
+// closeEngine performs a bounded protocol shutdown of the in-process engine.
+func closeEngine(connection *engine.Connection) {
+	ctx, cancel := context.WithTimeout(context.Background(), engineCloseTimeout)
+	defer cancel()
+
+	if err := connection.Close(ctx); err != nil {
+		fmt.Fprintln(os.Stderr, "flowmap: engine shutdown:", err)
+	}
 }
 
 type projectRegistry struct {
