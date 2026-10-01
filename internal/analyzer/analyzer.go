@@ -85,7 +85,7 @@ func buildIndex(snapshot semantic.Snapshot) *Index {
 		metas[symbol.ID] = &functionMeta{
 			directEdge: directEdge, externalCall: externalCall,
 			function: Function{
-				ID: symbol.ID, Name: symbol.Name, QualifiedName: symbol.QualifiedName,
+				ID: symbol.ID, Name: symbol.Name, Kind: symbol.Kind, QualifiedName: symbol.QualifiedName,
 				Package: symbol.Package, Language: symbol.Language, Signature: symbol.Signature.Display,
 				Parameters: append([]string(nil), symbol.Signature.Parameters...),
 				Results:    append([]string(nil), symbol.Signature.Results...),
