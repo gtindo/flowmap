@@ -122,6 +122,10 @@ The project picker lists configured projects. Each module is scanned when you fi
 
 The server binds to localhost by default and is not exposed to other machines. Stop it with `Ctrl-C`.
 
+### Engine Mode for Editor Integrations (Experimental)
+
+`flowmap engine` runs Flowmap's analysis engine without a web server. It speaks an experimental JSON-RPC protocol on standard input and output and is meant to be launched by editor or IDE extensions, not run by hand. Logs go to standard error. Add `--summarizer-command` to enable generated summaries, exactly as with `serve`.
+
 ## Add Flowmap to the macOS Dock
 
 While Flowmap is running, open `http://127.0.0.1:7878` in your browser:

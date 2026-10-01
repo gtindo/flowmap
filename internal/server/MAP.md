@@ -2,15 +2,15 @@
 
 ## Responsibility
 
-This package exposes a registry of per-project, per-language analysis indexes as a local HTTP workbench. It owns API routing, embedded static assets, lazy language scans, OpenTelemetry HTTP handler wrapping, request logs, atomic rescans, graceful network lifecycle, optional command-backed summaries, and summary caching outside the analyzed repository.
+This package is the HTTP adapter over the Flowmap engine protocol and the reference protocol client. It opens one engine workspace per configured project, mirrors view state from engine notifications, translates browser requests into snapshot-addressed protocol queries, and translates protocol models back into the browser's snake_case, path-based JSON. It also owns API routing, embedded static assets, OpenTelemetry HTTP handler wrapping, request logs, and graceful network lifecycle. It holds no analysis indexes.
 
 ## Files
 
 | File | Responsibility |
 |---|---|
-| `server.go` | `App`, project registry constructors, routes, OpenTelemetry HTTP wrapping, request logging, project-scoped HTTP handlers, atomic index replacement, scan serialization, and graceful serving |
-| `summarizer.go` | Summary contracts, command subprocess adapter, validation, and content-addressed user-cache storage |
-| `server_test.go` | API, static asset, rescan, concurrency, and summary behavior coverage |
+| `server.go` | `App`, workspace opening, routes, OpenTelemetry HTTP wrapping, request logging, project-scoped handlers, `Scan` (start analysis and await its notification), notification-driven view state, paging helpers, and protocol-error to HTTP-status mapping |
+| `convert.go` | Pure protocol → browser model translation (URIs to paths, camelCase to the `analyzer` JSON models, load reports for CLI warnings) |
+| `server_test.go` | API, static asset, rescan, concurrency, summary, and error-mapping coverage against a real in-process engine session |
 | `static/index.html` | Workbench document structure and controls |
 | `static/app.js` | API client, graph state, rendering, interaction, rescan, changes, and browser persistence |
 | `static/style.css` | Responsive visual system, graph/node layout, and light/dark presentation |
@@ -34,26 +34,23 @@ POST /api/rescan
 GET  /*                              embedded static workbench
 ```
 
-Handlers resolve a project and language from `project=<name>&language=<language>` and read that immutable `analyzer.Index` through an atomic pointer. A single-language project resolves omitted names for backwards compatibility. JSON errors use a small `{ "error": ... }` envelope. The returned handler is wrapped with OpenTelemetry HTTP instrumentation and telemetry-enabled structured request logging.
+Handlers resolve a project and language from `project=<name>&language=<language>` to an engine view and its current snapshot id, then issue `symbol/search`, `graph/neighborhood`, `symbol/get`, `changes/list`, or `symbol/summary`. A single-language project resolves omitted names for backwards compatibility. The adapter keeps the HTTP API's historical coercion of graph depth and direction because the protocol rejects invalid values. JSON errors use a small `{ "error": ... }` envelope. The returned handler is wrapped with OpenTelemetry HTTP instrumentation and telemetry-enabled structured request logging.
 
 ## Rescan Flow
 
 ```text
 POST /api/projects/{name}/scan or POST /api/rescan?project={name}
-  -> reject if that project scan is already active
-  -> analyzer.Analyze with that project's original Config
-  -> build a complete replacement Index
-  -> atomic pointer swap
+  -> analysis/start for that view (AnalysisAlreadyRunning -> 409)
+  -> await analysis/published or analysis/failed (request cancellation -> analysis/cancel)
+  -> page through diagnostics/list and changes/list for the published snapshot
   -> return function count, load report, and Git snapshot
 ```
 
-Each project mutex permits one scan at a time. Registry projects start unscanned, and a failed scan is isolated to that project. The atomic swap keeps searches and graph requests available against the previous complete index until its replacement is ready.
+The engine permits one analysis per view. Registry projects start unscanned, and a failed scan is isolated to that view while its previous snapshot stays queryable. Notifications can arrive before `Scan` begins waiting, so terminal outcomes are buffered by analysis id.
 
 ## Summary Flow
 
-Summaries are disabled unless the CLI supplies both a `Summarizer` and `SummaryCache`. `CommandSummarizer` sends a minimal JSON request to an explicitly configured shell command and expects a non-empty JSON `summary`. Cache keys include provider identity and the exact request payload, so changed function context or commands do not reuse stale text.
-
-The cache lives under the operating-system user cache directory, never in the analyzed repository.
+Summaries are available only when the engine advertises the `symbolSummary` capability; otherwise the endpoint returns `501`. Provider failures surface as engine internal errors and map to `502`. The summarizer and cache live in `internal/engine/`.
 
 ## Browser Workbench
 
@@ -63,8 +60,9 @@ Changes under `static/` require the existing two-space indentation and before/af
 
 ## Change Guide
 
-- Keep HTTP and subprocess effects here; put reusable graph or classification logic in `internal/analyzer/`.
+- Keep HTTP effects here; put session behavior in `internal/engine/` and graph or classification logic in `internal/analyzer/`.
+- New data must come through the protocol: add it to the wire models and engine first, then translate it in `convert.go`.
 - Add endpoints in `Handler`, keep response models explicit, and extend `server_test.go`.
 - Preserve the OpenTelemetry wrapper and request log middleware around the mux when changing routing.
-- Preserve immutable-index reads and complete-before-swap behavior when changing rescans.
+- Always query by explicit snapshot id; never assume the engine's current snapshot.
 - When routes, browser assets, rescan behavior, summary contracts, or file responsibilities change, update this map and the root `MAP.md` if the system-level flow changed.
