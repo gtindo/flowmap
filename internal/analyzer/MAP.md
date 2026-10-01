@@ -12,7 +12,7 @@ This package turns a language-neutral semantic snapshot into an immutable, evide
 | `analyzer.go` | Built-in-backend entry point and pure semantic-to-`Index` translation of symbols, contracts, relationships, source, intent, and diagnostics |
 | `classify.go` | Authored labels, direct side-effect evidence, known-pure packages, and conservative purity propagation |
 | `query.go` | Deterministic symbol search, function lookup, and bounded upstream/downstream graph traversal |
-| `git.go` | Non-fatal Git snapshot capture and attribution of `HEAD` diffs or untracked files to current callables, including owner-qualified JavaScript class methods |
+| `git.go` | Non-fatal Git snapshot capture and attribution of `HEAD` diffs or untracked files to current callables, including owner-qualified JavaScript class methods; new-vs-updated baselines read only diffed files' `HEAD` contents through one `git cat-file --batch` process |
 | `git_hierarchy.go` | Pure changed-function reachability, recursive-component collapse, leaf counts, and review ordering |
 | `load_diagnostics.go` | Translation and deterministic rendering of backend diagnostics and reproduction commands |
 | `*_test.go` | Unit and regression coverage for each analysis stage |

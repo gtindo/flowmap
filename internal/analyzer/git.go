@@ -3,6 +3,7 @@ package analyzer
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"go/ast"
 	"go/format"
 	"go/parser"
@@ -11,9 +12,12 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 
 	javascriptbackend "github.com/gtindo/flowmap/internal/backends/javascript"
 )
@@ -33,10 +37,24 @@ type diffHunk struct {
 }
 
 type fileDiff struct {
-	path   string
-	header []string
-	hunks  []diffHunk
+	path    string
+	oldPath string
+	header  []string
+	hunks   []diffHunk
 }
+
+const (
+	// Explicit prefixes keep patch paths parseable regardless of diff.noprefix or diff.mnemonicPrefix.
+	gitDiffSourcePrefix      = "a/"
+	gitDiffDestinationPrefix = "b/"
+	gitNullDevice            = "/dev/null"
+
+	headObjectPrefix       = "HEAD:"
+	catFileBlobType        = "blob"
+	catFileMissingSuffix   = " missing"
+	catFileAmbiguousSuffix = " ambiguous"
+	catFileHeaderFields    = 3
+)
 
 var hunkHeaderPattern = regexp.MustCompile(`^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@`)
 
@@ -83,10 +101,18 @@ func captureGitSnapshot(ctx context.Context, root string, functions map[string]F
 		return finishGitSnapshot(snapshot, functions)
 	}
 
-	baseline := baselineFunctionKeys(ctx, repositoryRoot, pathspec)
-	patchOutput, patchErr := gitOutput(ctx, repositoryRoot, "diff", "--no-ext-diff", "--no-color", "--unified=3", "HEAD", "--", pathspec)
+	patchOutput, patchErr := gitOutput(
+		ctx, repositoryRoot, "diff", "--no-ext-diff", "--no-color", "--unified=3",
+		"--src-prefix="+gitDiffSourcePrefix, "--dst-prefix="+gitDiffDestinationPrefix,
+		"HEAD", "--", pathspec,
+	)
 	if patchErr == nil {
-		for _, file := range parseGitDiff(string(patchOutput)) {
+		files := parseGitDiff(string(patchOutput))
+
+		// Only diffed spans consult the baseline, so HEAD is read for diffed files alone.
+		baseline := baselineFunctionKeys(ctx, repositoryRoot, baselinePaths(files, spans))
+
+		for _, file := range files {
 			for _, span := range spans[file.path] {
 				if diff := functionDiff(file, span); diff != "" {
 					kind := "new"
@@ -214,40 +240,203 @@ func resolvedPath(path string) string {
 	return filepath.Clean(path)
 }
 
-func baselineFunctionKeys(ctx context.Context, repositoryRoot string, pathspec string) map[string]bool {
-	paths, err := gitNullList(ctx, repositoryRoot, "ls-tree", "-r", "--name-only", "HEAD", "--", pathspec)
+// baselinePaths selects the HEAD paths whose declarations can decide whether a
+// diffed span is new or updated, so unchanged files are never read or parsed.
+//
+// Operations (Pure)
+func baselinePaths(files []fileDiff, spans map[string][]functionSpan) []string {
+	changedDirectories := make(map[string]bool)
+	for _, file := range files {
+		if len(spans[file.path]) == 0 {
+			continue
+		}
+		changedDirectories[slashDirectory(file.path)] = true
+	}
+	if len(changedDirectories) == 0 {
+		return nil
+	}
+
+	selected := make(map[string]bool)
+	for _, file := range files {
+		candidate := file.oldPath
+		switch {
+		case candidate == "":
+			continue
+		case strings.HasSuffix(candidate, ".go"):
+			// Go keys are package-scoped, so a function moved or renamed out of another
+			// diffed file in the same directory keeps its HEAD identity.
+			if !changedDirectories[slashDirectory(candidate)] {
+				continue
+			}
+		case supportedJavaScriptPath(candidate):
+			// JavaScript keys embed the file path, so only a same-path HEAD file can match.
+			if candidate != file.path || len(spans[candidate]) == 0 {
+				continue
+			}
+		default:
+			continue
+		}
+		selected[candidate] = true
+	}
+
+	result := make([]string, 0, len(selected))
+	for path := range selected {
+		result = append(result, path)
+	}
+	sort.Strings(result)
+	return result
+}
+
+func slashDirectory(path string) string {
+	return filepath.ToSlash(filepath.Dir(path))
+}
+
+// baselineFunctionKeys returns the declaration keys present at HEAD in paths.
+// It is non-fatal: any Git failure yields an empty baseline.
+//
+// Side Effect (Edge)
+func baselineFunctionKeys(ctx context.Context, repositoryRoot string, paths []string) map[string]bool {
+	sources, err := readHeadFiles(ctx, repositoryRoot, paths)
 	if err != nil {
 		return map[string]bool{}
 	}
-	result := make(map[string]bool)
+
+	return declarationKeysFromSources(sources)
+}
+
+// readHeadFiles reads the HEAD contents of repository-relative paths through a
+// single `git cat-file --batch` process. Paths absent from HEAD are omitted.
+//
+// Side Effect (Edge)
+func readHeadFiles(ctx context.Context, repositoryRoot string, paths []string) (map[string][]byte, error) {
+	requested := make([]string, 0, len(paths))
+	var request strings.Builder
 	for _, path := range paths {
-		if !strings.HasSuffix(path, ".go") {
-			if supportedJavaScriptPath(path) {
-				contents, showErr := gitOutput(ctx, repositoryRoot, "show", "HEAD:"+path)
-				if showErr == nil {
-					for _, name := range javascriptDeclarationNames(string(contents)) {
-						qualified := strings.TrimSuffix(path, filepath.Ext(path)) + "." + name
-						result[path+"|"+qualified] = true
-					}
-				}
+		// The batch protocol is line-delimited, so a newline cannot be requested safely.
+		if strings.Contains(path, "\n") {
+			continue
+		}
+		requested = append(requested, path)
+		request.WriteString(headObjectPrefix)
+		request.WriteString(path)
+		request.WriteByte('\n')
+	}
+	if len(requested) == 0 {
+		return map[string][]byte{}, nil
+	}
+
+	command := exec.CommandContext(ctx, "git", "-C", repositoryRoot, "cat-file", "--batch")
+	command.Stdin = strings.NewReader(request.String())
+	output, err := command.Output()
+	if err != nil {
+		return nil, fmt.Errorf("read HEAD files with git cat-file: %w", err)
+	}
+
+	contents, err := parseCatFileBatch(output, requested)
+	if err != nil {
+		return nil, fmt.Errorf("parse git cat-file output: %w", err)
+	}
+	return contents, nil
+}
+
+// parseCatFileBatch splits `git cat-file --batch` output into blob contents
+// keyed by the requested paths, in request order. Missing objects are omitted.
+//
+// Operations (Pure)
+func parseCatFileBatch(output []byte, paths []string) (map[string][]byte, error) {
+	result := make(map[string][]byte, len(paths))
+	remaining := output
+	for _, path := range paths {
+		newline := bytes.IndexByte(remaining, '\n')
+		if newline < 0 {
+			return nil, fmt.Errorf("missing response header for %q", path)
+		}
+		header := string(remaining[:newline])
+		remaining = remaining[newline+1:]
+
+		// Missing and ambiguous responses echo the object name and carry no body.
+		if strings.HasSuffix(header, catFileMissingSuffix) || strings.HasSuffix(header, catFileAmbiguousSuffix) {
+			continue
+		}
+
+		fields := strings.Fields(header)
+		if len(fields) != catFileHeaderFields {
+			return nil, fmt.Errorf("unexpected response header %q for %q", header, path)
+		}
+		size, err := strconv.Atoi(fields[2])
+		if err != nil || size < 0 {
+			return nil, fmt.Errorf("invalid object size in header %q for %q", header, path)
+		}
+		if len(remaining) < size+1 || remaining[size] != '\n' {
+			return nil, fmt.Errorf("truncated object body for %q", path)
+		}
+
+		if fields[1] == catFileBlobType {
+			result[path] = remaining[:size]
+		}
+		remaining = remaining[size+1:]
+	}
+	return result, nil
+}
+
+// declarationKeysFromSources derives the change-classification keys declared
+// by each HEAD source, matching the keys produced for current spans.
+//
+// Operations (Pure)
+func declarationKeysFromSources(sources map[string][]byte) map[string]bool {
+	paths := make([]string, 0, len(sources))
+	for path := range sources {
+		paths = append(paths, path)
+	}
+
+	// Files parse independently, so large diffs spread across available cores.
+	keysByPath := make([][]string, len(paths))
+	var next atomic.Int64
+	var group sync.WaitGroup
+	for range min(runtime.GOMAXPROCS(0), len(paths)) {
+		group.Go(func() {
+			for index := int(next.Add(1)) - 1; index < len(paths); index = int(next.Add(1)) - 1 {
+				keysByPath[index] = sourceDeclarationKeys(paths[index], sources[paths[index]])
 			}
-			continue
-		}
-		contents, err := gitOutput(ctx, repositoryRoot, "show", "HEAD:"+path)
-		if err != nil {
-			continue
-		}
-		parsed, err := parser.ParseFile(token.NewFileSet(), path, contents, 0)
-		if err != nil {
-			continue
-		}
-		for _, declaration := range parsed.Decls {
-			if functionDeclaration, ok := declaration.(*ast.FuncDecl); ok {
-				result[declarationKey(path, parsed.Name.Name, functionDeclaration)] = true
-			}
+		})
+	}
+	group.Wait()
+
+	result := make(map[string]bool)
+	for _, keys := range keysByPath {
+		for _, key := range keys {
+			result[key] = true
 		}
 	}
 	return result
+}
+
+func sourceDeclarationKeys(path string, contents []byte) []string {
+	if supportedJavaScriptPath(path) {
+		modulePath := strings.TrimSuffix(path, filepath.Ext(path))
+		names := javascriptDeclarationNames(string(contents))
+		keys := make([]string, 0, len(names))
+		for _, name := range names {
+			keys = append(keys, path+"|"+modulePath+"."+name)
+		}
+		return keys
+	}
+	if !strings.HasSuffix(path, ".go") {
+		return nil
+	}
+
+	parsed, err := parser.ParseFile(token.NewFileSet(), path, contents, 0)
+	if err != nil {
+		return nil
+	}
+
+	keys := make([]string, 0, len(parsed.Decls))
+	for _, declaration := range parsed.Decls {
+		if functionDeclaration, ok := declaration.(*ast.FuncDecl); ok {
+			keys = append(keys, declarationKey(path, parsed.Name.Name, functionDeclaration))
+		}
+	}
+	return keys
 }
 
 func supportedJavaScriptPath(path string) bool {
@@ -290,8 +479,11 @@ func parseGitDiff(patch string) []fileDiff {
 		}
 		if strings.HasPrefix(line, "--- ") || strings.HasPrefix(line, "+++ ") {
 			current.header = append(current.header, line)
+			if strings.HasPrefix(line, "--- ") {
+				current.oldPath = gitPatchPath(strings.TrimPrefix(line, "--- "), gitDiffSourcePrefix)
+			}
 			if strings.HasPrefix(line, "+++ ") {
-				current.path = gitPatchPath(strings.TrimPrefix(line, "+++ "))
+				current.path = gitPatchPath(strings.TrimPrefix(line, "+++ "), gitDiffDestinationPrefix)
 			}
 			continue
 		}
@@ -310,17 +502,17 @@ func parseGitDiff(patch string) []fileDiff {
 	return result
 }
 
-func gitPatchPath(value string) string {
+func gitPatchPath(value string, prefix string) string {
 	value = strings.TrimSuffix(value, "\t")
 	if strings.HasPrefix(value, "\"") {
 		if unquoted, err := strconv.Unquote(value); err == nil {
 			value = unquoted
 		}
 	}
-	if value == "/dev/null" {
+	if value == gitNullDevice {
 		return ""
 	}
-	return strings.TrimPrefix(value, "b/")
+	return strings.TrimPrefix(value, prefix)
 }
 
 func functionDiff(file fileDiff, span functionSpan) string {

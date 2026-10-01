@@ -2,18 +2,24 @@
 package javascript
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strings"
+	"sync"
+	"sync/atomic"
 
 	"github.com/gtindo/flowmap/internal/semantic"
-	"github.com/kdy1/go-typescript-eslint/pkg/typescriptestree"
 )
 
 // Backend parses JavaScript, TypeScript, JSX, and TSX without a Node runtime.
@@ -43,20 +49,66 @@ var (
 	factoryBindingPattern = regexp.MustCompile(`\b(?:const|let|var)\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*([A-Za-z_$][A-Za-z0-9_$]*)\s*\(`)
 )
 
+// moduleExtensions lists supported extensions in resolution priority order so
+// that an import matching both `name.ts` and `name.js` resolves deterministically.
+var moduleExtensions = []string{".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"}
+
 var supportedExtensions = map[string]bool{
 	".js": true, ".mjs": true, ".cjs": true, ".jsx": true,
 	".ts": true, ".mts": true, ".cts": true, ".tsx": true,
 }
 
+// ignoredDirectories covers dependency stores, caches, and build outputs that
+// are commonly present even when a repository's ignore rules are unavailable.
 var ignoredDirectories = map[string]bool{
 	".git": true, "node_modules": true, "vendor": true, "dist": true, "build": true,
-	"coverage": true, ".next": true, "out": true,
+	"coverage": true, ".next": true, "out": true, "bower_components": true, "jspm_packages": true,
+	".yarn": true, ".pnpm-store": true, ".turbo": true, ".cache": true, ".parcel-cache": true,
+	".nuxt": true, ".output": true, ".svelte-kit": true, ".vercel": true, ".netlify": true,
+	".docusaurus": true, ".expo": true, ".angular": true, "storybook-static": true,
 }
+
+// ignoredFiles are package-manager runtime files that are large generated code.
+var ignoredFiles = map[string]bool{
+	".pnp.cjs": true, ".pnp.js": true, ".pnp.loader.mjs": true,
+}
+
+var keywords = map[string]bool{
+	"if": true, "for": true, "while": true, "switch": true, "catch": true, "function": true, "return": true,
+	"new": true, "typeof": true, "import": true, "export": true, "class": true,
+}
+
+const (
+	// maxSourceBytes bounds a single file; larger JavaScript is almost always
+	// bundled or generated output that adds noise rather than local intent.
+	maxSourceBytes = 1 << 20
+	// minifiedMinimumBytes avoids flagging short one-line modules as minified.
+	minifiedMinimumBytes = 16 << 10
+	// minifiedAverageLineBytes is the average line length that marks minified output.
+	minifiedAverageLineBytes = 250
+	// arrowBodyBraceWindow is how far after `=>` a block body brace may start.
+	arrowBodyBraceWindow  = 8
+	skippedDiagnosticKind = "skipped"
+)
 
 type sourceFile struct {
 	abs string
 	rel string
 	src string
+
+	// masked, lineStarts, semicolons, and braces are computed once per file so
+	// per-symbol lookups never rescan the whole source.
+	masked     string
+	lineStarts []int
+	semicolons []int
+	braces     map[int]int
+
+	// Module syntax matches are scanned during the parallel parse phase and
+	// applied later by the order-sensitive, serial linking phase.
+	importMatches      [][]string
+	requireMatches     [][]string
+	exportNamedMatches [][]string
+	exportStarMatches  [][]string
 
 	functions       map[string]*symbolRecord
 	classes         map[string]*classInfo
@@ -92,6 +144,8 @@ type symbolRecord struct {
 	file   *sourceFile
 	body   string
 
+	maskedBody string
+
 	class      *classInfo
 	memberName string
 	access     string
@@ -108,31 +162,31 @@ func (Backend) Analyze(ctx context.Context, request semantic.AnalysisRequest) (s
 		return semantic.Snapshot{}, fmt.Errorf("resolve analysis root: %w", err)
 	}
 
-	files, diagnostics, err := collectFiles(ctx, root)
+	paths, err := sourcePaths(ctx, root)
 	if err != nil {
 		return semantic.Snapshot{}, err
 	}
 
-	records := make([]*symbolRecord, 0)
-	byFile := make(map[string]*sourceFile, len(files))
-	for _, file := range files {
-		byFile[file.rel] = file
-		parsed, parseErr := parse(file)
-		if parseErr != nil {
-			diagnostics.FailedUnits++
-			diagnostics.Diagnostics = append(diagnostics.Diagnostics, semantic.Diagnostic{Kind: "parse", Position: file.rel, Message: parseErr.Error(), Units: []string{file.rel}})
-			continue
-		}
-		records = append(records, parsed...)
+	files, records, diagnostics, err := loadAndParse(ctx, root, paths)
+	if err != nil {
+		return semantic.Snapshot{}, err
 	}
-
 	if len(records) == 0 {
 		return semantic.Snapshot{}, fmt.Errorf("analyze JavaScript source: no local functions found beneath %s", root)
 	}
 
+	byFile := make(map[string]*sourceFile, len(files))
+	for _, file := range files {
+		byFile[file.rel] = file
+	}
 	linkModules(files, byFile)
 	markPublicCallables(records, files)
-	relationships := collectRelationships(records)
+
+	relationships, err := collectRelationships(ctx, records)
+	if err != nil {
+		return semantic.Snapshot{}, err
+	}
+
 	symbols := make([]semantic.Symbol, 0, len(records))
 	for _, record := range records {
 		symbols = append(symbols, record.symbol)
@@ -151,9 +205,138 @@ func (Backend) Analyze(ctx context.Context, request semantic.AnalysisRequest) (s
 	return semantic.Snapshot{Root: root, Language: "javascript", Symbols: symbols, Relationships: relationships, Diagnostics: diagnostics}, nil
 }
 
-func collectFiles(ctx context.Context, root string) ([]*sourceFile, semantic.DiagnosticReport, error) {
-	files := make([]*sourceFile, 0)
+// fileOutcome is one file's independent load and parse result.
+type fileOutcome struct {
+	file    *sourceFile
+	records []*symbolRecord
+	skip    string
+	failure *semantic.Diagnostic
+}
+
+// loadAndParse reads and parses candidate files concurrently, then folds the
+// outcomes in path order so the result is deterministic.
+// Side Effect (Edge): reads source files.
+func loadAndParse(ctx context.Context, root string, paths []string) ([]*sourceFile, []*symbolRecord, semantic.DiagnosticReport, error) {
+	outcomes := make([]fileOutcome, len(paths))
+	err := forEachParallel(ctx, len(paths), func(index int) {
+		outcomes[index] = loadAndParseFile(root, paths[index])
+	})
+	if err != nil {
+		return nil, nil, semantic.DiagnosticReport{}, err
+	}
+
+	files := make([]*sourceFile, 0, len(paths))
+	records := make([]*symbolRecord, 0)
 	diagnostics := semantic.DiagnosticReport{}
+	skippedByReason := map[string][]string{}
+	for _, outcome := range outcomes {
+		if outcome.skip != "" {
+			skippedByReason[outcome.skip] = append(skippedByReason[outcome.skip], outcome.file.rel)
+			continue
+		}
+		if outcome.file == nil {
+			continue
+		}
+
+		diagnostics.TotalUnits++
+		files = append(files, outcome.file)
+		if outcome.failure != nil {
+			diagnostics.FailedUnits++
+			diagnostics.Diagnostics = append(diagnostics.Diagnostics, *outcome.failure)
+			continue
+		}
+		records = append(records, outcome.records...)
+	}
+
+	reasons := make([]string, 0, len(skippedByReason))
+	for reason := range skippedByReason {
+		reasons = append(reasons, reason)
+	}
+	sort.Strings(reasons)
+	for _, reason := range reasons {
+		units := skippedByReason[reason]
+		diagnostics.Diagnostics = append(diagnostics.Diagnostics, semantic.Diagnostic{Kind: skippedDiagnosticKind, Position: units[0], Message: fmt.Sprintf("skipped %d %s file(s)", len(units), reason), Units: units})
+	}
+	return files, records, diagnostics, nil
+}
+
+// loadAndParseFile reads one file, applies size guards, and extracts callables.
+// Side Effect (Edge): reads one source file.
+func loadAndParseFile(root, relative string) fileOutcome {
+	path := filepath.Join(root, filepath.FromSlash(relative))
+	contents, err := os.ReadFile(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		// Git can list tracked files that were deleted from the working tree.
+		return fileOutcome{}
+	}
+
+	file := newSourceFile(path, relative, string(contents))
+	if err != nil {
+		return fileOutcome{file: file, failure: &semantic.Diagnostic{Kind: "read", Position: relative, Message: err.Error(), Units: []string{relative}}}
+	}
+	if len(contents) > maxSourceBytes {
+		return fileOutcome{file: file, skip: "oversized"}
+	}
+	if looksMinified(contents) {
+		return fileOutcome{file: file, skip: "minified"}
+	}
+
+	records, err := parse(file)
+	if err != nil {
+		return fileOutcome{file: file, failure: &semantic.Diagnostic{Kind: "parse", Position: relative, Message: err.Error(), Units: []string{relative}}}
+	}
+	return fileOutcome{file: file, records: records}
+}
+
+// looksMinified detects bundled or minified output by its average line length.
+// Operations (Pure): inspects explicit file contents.
+func looksMinified(contents []byte) bool {
+	if len(contents) < minifiedMinimumBytes {
+		return false
+	}
+
+	lines := bytes.Count(contents, []byte{'\n'}) + 1
+	return len(contents)/lines >= minifiedAverageLineBytes
+}
+
+func newSourceFile(abs, rel, src string) *sourceFile {
+	return &sourceFile{abs: abs, rel: rel, src: src, functions: map[string]*symbolRecord{}, classes: map[string]*classInfo{}, exportFunctions: map[string]*symbolRecord{}, exportClasses: map[string]*classInfo{}, dependencies: map[string]*symbolRecord{}, classAliases: map[string]*classInfo{}, moduleAliases: map[string]*sourceFile{}}
+}
+
+// sourcePaths lists candidate files relative to root. Inside a Git work tree it
+// honors the repository's ignore rules; otherwise it walks the directory.
+// Side Effect (Edge): runs Git or walks the filesystem.
+func sourcePaths(ctx context.Context, root string) ([]string, error) {
+	if listed, ok := gitSourcePaths(ctx, root); ok {
+		if paths := filterSourcePaths(listed); len(paths) > 0 {
+			return paths, nil
+		}
+	}
+	return walkSourcePaths(ctx, root)
+}
+
+// gitSourcePaths returns tracked and untracked-but-not-ignored files beneath root.
+// Side Effect (Edge): runs Git.
+func gitSourcePaths(ctx context.Context, root string) ([]string, bool) {
+	command := exec.CommandContext(ctx, "git", "-C", root, "ls-files", "-z", "--cached", "--others", "--exclude-standard")
+	output, err := command.Output()
+	if err != nil {
+		return nil, false
+	}
+
+	paths := make([]string, 0)
+	for _, entry := range bytes.Split(output, []byte{0}) {
+		if len(entry) > 0 {
+			paths = append(paths, string(entry))
+		}
+	}
+	return paths, true
+}
+
+// walkSourcePaths lists candidate files when Git ignore rules are unavailable.
+// Side Effect (Edge): walks the filesystem.
+func walkSourcePaths(ctx context.Context, root string) ([]string, error) {
+	paths := make([]string, 0)
 	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
@@ -167,31 +350,89 @@ func collectFiles(ctx context.Context, root string) ([]*sourceFile, semantic.Dia
 			}
 			return nil
 		}
-		if !supportedExtensions[strings.ToLower(filepath.Ext(path))] || strings.HasSuffix(path, ".d.ts") || generatedName(path) {
-			return nil
+
+		relative, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
 		}
-		contents, readErr := os.ReadFile(path)
-		if readErr != nil {
-			return fmt.Errorf("read JavaScript source %s: %w", path, readErr)
-		}
-		relative, relativeErr := filepath.Rel(root, path)
-		if relativeErr != nil {
-			return relativeErr
-		}
-		diagnostics.TotalUnits++
-		files = append(files, &sourceFile{abs: path, rel: filepath.ToSlash(relative), src: string(contents), functions: map[string]*symbolRecord{}, classes: map[string]*classInfo{}, exportFunctions: map[string]*symbolRecord{}, exportClasses: map[string]*classInfo{}, dependencies: map[string]*symbolRecord{}, classAliases: map[string]*classInfo{}, moduleAliases: map[string]*sourceFile{}})
+		paths = append(paths, filepath.ToSlash(relative))
 		return nil
 	})
 	if err != nil {
-		return nil, diagnostics, fmt.Errorf("walk JavaScript source: %w", err)
+		return nil, fmt.Errorf("walk JavaScript source: %w", err)
 	}
-	sort.Slice(files, func(left, right int) bool { return files[left].rel < files[right].rel })
-	return files, diagnostics, nil
+	return filterSourcePaths(paths), nil
 }
 
-func generatedName(path string) bool {
-	name := strings.ToLower(filepath.Base(path))
+// filterSourcePaths keeps supported, non-generated sources outside ignored
+// directories, sorted and deduplicated.
+// Operations (Pure): filters explicit relative paths.
+func filterSourcePaths(paths []string) []string {
+	result := make([]string, 0, len(paths))
+	seen := make(map[string]bool, len(paths))
+	for _, path := range paths {
+		if seen[path] || !isCandidateSource(path) {
+			continue
+		}
+		seen[path] = true
+		result = append(result, path)
+	}
+	sort.Strings(result)
+	return result
+}
+
+func isCandidateSource(relative string) bool {
+	segments := strings.Split(relative, "/")
+	for _, directory := range segments[:len(segments)-1] {
+		if ignoredDirectories[directory] {
+			return false
+		}
+	}
+
+	name := segments[len(segments)-1]
+	if ignoredFiles[name] || strings.HasSuffix(name, ".d.ts") || generatedName(name) {
+		return false
+	}
+	return supportedExtensions[strings.ToLower(filepath.Ext(name))]
+}
+
+func generatedName(name string) bool {
+	name = strings.ToLower(name)
 	return strings.Contains(name, ".generated.") || strings.Contains(name, ".gen.") || strings.Contains(name, ".min.")
+}
+
+// forEachParallel runs work for every index on a bounded worker pool. A panic
+// in a worker is re-raised on the calling goroutine so callers keep their
+// usual recovery behavior.
+func forEachParallel(ctx context.Context, count int, work func(index int)) error {
+	workers := min(runtime.GOMAXPROCS(0), count)
+	var next atomic.Int64
+	var panicOnce sync.Once
+	var recovered any
+
+	var group sync.WaitGroup
+	for range workers {
+		group.Go(func() {
+			defer func() {
+				if value := recover(); value != nil {
+					panicOnce.Do(func() { recovered = value })
+				}
+			}()
+			for ctx.Err() == nil {
+				index := int(next.Add(1)) - 1
+				if index >= count {
+					return
+				}
+				work(index)
+			}
+		})
+	}
+	group.Wait()
+
+	if recovered != nil {
+		panic(recovered)
+	}
+	return ctx.Err()
 }
 
 // DeclarationNames returns callable names for JavaScript-family source. It is
@@ -199,17 +440,7 @@ func generatedName(path string) bool {
 // the semantic snapshot.
 // Operations (Pure): extracts callable names from explicit source text.
 func DeclarationNames(source string) []string {
-	file := &sourceFile{
-		rel:             "source.ts",
-		src:             source,
-		functions:       map[string]*symbolRecord{},
-		classes:         map[string]*classInfo{},
-		exportFunctions: map[string]*symbolRecord{},
-		exportClasses:   map[string]*classInfo{},
-		dependencies:    map[string]*symbolRecord{},
-		classAliases:    map[string]*classInfo{},
-		moduleAliases:   map[string]*sourceFile{},
-	}
+	file := newSourceFile("", "source.ts", source)
 	records, _ := parse(file)
 	names := make([]string, 0, len(records))
 	for _, record := range records {
@@ -218,15 +449,21 @@ func DeclarationNames(source string) []string {
 	return names
 }
 
-func parse(file *sourceFile) ([]*symbolRecord, error) {
-	options := typescriptestree.NewBuilder().WithSourceType(typescriptestree.SourceTypeModule).WithFilePath(file.abs).WithLoc(true).WithRange(true).MustBuild()
-	// Validation is intentionally best effort: the standalone extractor still handles
-	// syntax that this parser version does not yet accept.
-	_, _ = typescriptestree.Parse(importPattern.ReplaceAllString(file.src, ""), options)
+// parse extracts callable records from one file. Extraction is best effort:
+// unexpected source shapes become a per-file error instead of failing the scan.
+// Operations (Pure): reads and annotates the explicit file model.
+func parse(file *sourceFile) (records []*symbolRecord, err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			records, err = nil, fmt.Errorf("extract callables: %v", recovered)
+		}
+	}()
 
-	masked := maskSource(file.src)
+	prepareSource(file)
+	scanModuleSyntax(file)
+	masked := file.masked
 	classes := extractClasses(file, masked)
-	records := make([]*symbolRecord, 0)
+	records = make([]*symbolRecord, 0)
 	for _, class := range classes {
 		records = append(records, extractMethods(file, class, masked)...)
 	}
@@ -284,7 +521,7 @@ func extractClasses(file *sourceFile, masked string) []*classInfo {
 		if name == "" || file.classes[name] != nil {
 			return
 		}
-		end := matchingBrace(masked, brace)
+		end := file.matchingBrace(brace)
 		if end < 0 {
 			return
 		}
@@ -322,6 +559,7 @@ func extractMethods(file *sourceFile, class *classInfo, masked string) []*symbol
 	records := make([]*symbolRecord, 0)
 	bodyStart := strings.Index(masked[class.start:class.end], "{") + class.start + 1
 	body := masked[bodyStart : class.end-1]
+	depth := braceCursor{text: body}
 	for _, match := range methodPattern.FindAllStringSubmatchIndex(body, -1) {
 		start := bodyStart + match[0]
 		name := file.src[bodyStart+match[10] : bodyStart+match[11]]
@@ -333,7 +571,7 @@ func extractMethods(file *sourceFile, class *classInfo, masked string) []*symbol
 		if brace < start {
 			continue
 		}
-		if braceDepth(masked[bodyStart:brace]) != 0 {
+		if depth.at(brace-bodyStart) != 0 {
 			continue
 		}
 		memberName := name
@@ -384,8 +622,9 @@ func methodAccess(declaration string) string {
 }
 
 func extractClassFields(class *classInfo, body string) {
+	depth := braceCursor{text: body}
 	for _, match := range fieldTypePattern.FindAllStringSubmatchIndex(body, -1) {
-		if braceDepth(body[:match[0]]) != 0 {
+		if depth.at(match[0]) != 0 {
 			continue
 		}
 		class.fields[body[match[2]:match[3]]] = body[match[4]:match[5]]
@@ -393,9 +632,9 @@ func extractClassFields(class *classInfo, body string) {
 }
 
 func addRecord(file *sourceFile, class *classInfo, name, memberName, parameters string, declarationStart, bodyStart int, returnType string, static, exported bool) *symbolRecord {
-	end := expressionEnd(file.src, bodyStart)
+	end := expressionEnd(file, bodyStart)
 	start := commentStart(file.src, declarationStart)
-	line, endLine := lineAt(file.src, start), lineAt(file.src, end)
+	line, endLine := file.lineAt(start), file.lineAt(end)
 	qualified := strings.TrimSuffix(file.rel, filepath.Ext(file.rel)) + "." + name
 	identity := file.rel + "|" + qualified + fmt.Sprintf("|%d", declarationStart)
 	digest := sha256.Sum256([]byte(identity))
@@ -404,7 +643,7 @@ func addRecord(file *sourceFile, class *classInfo, name, memberName, parameters 
 	if class != nil {
 		kind = semantic.SymbolMethod
 	}
-	record := &symbolRecord{symbol: semantic.Symbol{ID: identifier, ChangeKey: file.rel + "|" + qualified, Language: "javascript", Kind: kind, Name: name, QualifiedName: qualified, Package: filepath.ToSlash(filepath.Dir(file.rel)), Location: semantic.Location{File: file.abs, Line: line, EndLine: endLine}, Source: file.src[start:end], Documentation: jsDoc(file.src, declarationStart), Signature: semantic.Signature{Display: name + "(" + strings.TrimSpace(parameters) + ")", Parameters: parameterList(parameters)}, Test: isTestFile(file.rel)}, file: file, body: file.src[bodyStart:end], class: class, memberName: memberName, static: static, returnType: simpleType(returnType), exported: exported}
+	record := &symbolRecord{symbol: semantic.Symbol{ID: identifier, ChangeKey: file.rel + "|" + qualified, Language: "javascript", Kind: kind, Name: name, QualifiedName: qualified, Package: filepath.ToSlash(filepath.Dir(file.rel)), Location: semantic.Location{File: file.abs, Line: line, EndLine: endLine}, Source: file.src[start:end], Documentation: jsDoc(file.src, declarationStart), Signature: semantic.Signature{Display: name + "(" + strings.TrimSpace(parameters) + ")", Parameters: parameterList(parameters)}, Test: isTestFile(file.rel)}, file: file, body: file.src[bodyStart:end], maskedBody: file.masked[bodyStart:end], class: class, memberName: memberName, static: static, returnType: simpleType(returnType), exported: exported}
 	if class == nil {
 		file.functions[name] = record
 		if exported {
@@ -460,8 +699,17 @@ func linkModules(files []*sourceFile, byFile map[string]*sourceFile) {
 	}
 }
 
+// scanModuleSyntax records import, require, and export matches for linking.
+// Operations (Pure): scans explicit source text.
+func scanModuleSyntax(file *sourceFile) {
+	file.importMatches = importPattern.FindAllStringSubmatch(file.src, -1)
+	file.requireMatches = requirePattern.FindAllStringSubmatch(file.src, -1)
+	file.exportNamedMatches = exportNamedPattern.FindAllStringSubmatch(file.src, -1)
+	file.exportStarMatches = exportStarPattern.FindAllStringSubmatch(file.src, -1)
+}
+
 func linkImports(file *sourceFile, files map[string]*sourceFile) {
-	for _, match := range importPattern.FindAllStringSubmatch(file.src, -1) {
+	for _, match := range file.importMatches {
 		if !strings.HasPrefix(match[2], ".") {
 			continue
 		}
@@ -507,14 +755,14 @@ func linkImports(file *sourceFile, files map[string]*sourceFile) {
 			}
 		}
 	}
-	for _, match := range requirePattern.FindAllStringSubmatch(file.src, -1) {
+	for _, match := range file.requireMatches {
 		if strings.HasPrefix(match[2], ".") {
 			if target := resolveModule(file.rel, match[2], files); target != nil {
 				file.moduleAliases[match[1]] = target
 			}
 		}
 	}
-	for _, match := range exportNamedPattern.FindAllStringSubmatch(file.src, -1) {
+	for _, match := range file.exportNamedMatches {
 		module := ""
 		if len(match) > 2 {
 			module = match[2]
@@ -540,7 +788,7 @@ func linkImports(file *sourceFile, files map[string]*sourceFile) {
 			}
 		}
 	}
-	for _, match := range exportStarPattern.FindAllStringSubmatch(file.src, -1) {
+	for _, match := range file.exportStarMatches {
 		if strings.HasPrefix(match[1], ".") {
 			file.reexports = append(file.reexports, reexport{module: match[1], all: true})
 		}
@@ -555,50 +803,70 @@ func resolveClassLinks(file *sourceFile) {
 	}
 }
 
-func collectRelationships(records []*symbolRecord) []semantic.Relationship {
-	edges := make([]semantic.Relationship, 0)
-	seen := map[string]bool{}
-	add := func(from, to *symbolRecord, kind string, dynamic bool) {
-		if from == nil || to == nil || from == to {
-			return
-		}
-		key := from.symbol.ID + "|" + to.symbol.ID + "|" + kind
-		if seen[key] {
-			return
-		}
-		seen[key] = true
-		edges = append(edges, semantic.Relationship{FromID: from.symbol.ID, ToID: to.symbol.ID, Kind: kind, Dynamic: dynamic})
+// collectRelationships resolves each record's calls concurrently and merges
+// the per-record edges in record order with global de-duplication.
+func collectRelationships(ctx context.Context, records []*symbolRecord) ([]semantic.Relationship, error) {
+	perRecord := make([][]semantic.Relationship, len(records))
+	err := forEachParallel(ctx, len(records), func(index int) {
+		perRecord[index] = recordRelationships(records[index])
+	})
+	if err != nil {
+		return nil, err
 	}
-	for _, record := range records {
-		clean := maskSource(record.body)
-		bindings := receiverBindings(record)
-		for _, match := range memberCallPattern.FindAllStringSubmatch(clean, -1) {
-			receiver, method := match[1], match[2]
-			if target, direct := resolveMember(record, receiver, method, bindings); target != nil {
-				kind := semantic.RelationshipCall
-				if !direct {
-					kind = semantic.RelationshipDependency
-				}
-				add(record, target, kind, !direct)
+
+	edges := make([]semantic.Relationship, 0)
+	seen := map[semantic.Relationship]bool{}
+	for _, relationships := range perRecord {
+		for _, relationship := range relationships {
+			key := semantic.Relationship{FromID: relationship.FromID, ToID: relationship.ToID, Kind: relationship.Kind}
+			if seen[key] {
 				continue
 			}
+			seen[key] = true
+			edges = append(edges, relationship)
 		}
-		for _, match := range directCallPattern.FindAllStringSubmatchIndex(clean, -1) {
-			name := clean[match[2]:match[3]]
-			if keyword(name) || name == record.memberName || precededByDot(clean, match[0]) {
-				continue
+	}
+	return edges, nil
+}
+
+// recordRelationships finds one record's local call and dependency edges and
+// appends its external-call facts. It only mutates the given record.
+func recordRelationships(record *symbolRecord) []semantic.Relationship {
+	edges := make([]semantic.Relationship, 0)
+	add := func(target *symbolRecord, kind string, dynamic bool) {
+		if target == nil || target == record {
+			return
+		}
+		edges = append(edges, semantic.Relationship{FromID: record.symbol.ID, ToID: target.symbol.ID, Kind: kind, Dynamic: dynamic})
+	}
+
+	clean := record.maskedBody
+	bindings := receiverBindings(record)
+	for _, match := range memberCallPattern.FindAllStringSubmatch(clean, -1) {
+		receiver, method := match[1], match[2]
+		if target, direct := resolveMember(record, receiver, method, bindings); target != nil {
+			kind := semantic.RelationshipCall
+			if !direct {
+				kind = semantic.RelationshipDependency
 			}
-			if target := record.file.functions[name]; target != nil {
-				add(record, target, semantic.RelationshipCall, false)
-				continue
-			}
-			if target := record.file.dependencies[name]; target != nil {
-				add(record, target, semantic.RelationshipCall, false)
-				continue
-			}
-			if !knownNonCall(name) {
-				record.symbol.Facts = append(record.symbol.Facts, semantic.Fact{Kind: semantic.FactExternalCall, Name: name})
-			}
+			add(target, kind, !direct)
+		}
+	}
+	for _, match := range directCallPattern.FindAllStringSubmatchIndex(clean, -1) {
+		name := clean[match[2]:match[3]]
+		if keywords[name] || name == record.memberName || precededByDot(clean, match[0]) {
+			continue
+		}
+		if target := record.file.functions[name]; target != nil {
+			add(target, semantic.RelationshipCall, false)
+			continue
+		}
+		if target := record.file.dependencies[name]; target != nil {
+			add(target, semantic.RelationshipCall, false)
+			continue
+		}
+		if !knownNonCall(name) {
+			record.symbol.Facts = append(record.symbol.Facts, semantic.Fact{Kind: semantic.FactExternalCall, Name: name})
 		}
 	}
 	return edges
@@ -643,7 +911,7 @@ func receiverBindings(record *symbolRecord) map[string]*classInfo {
 			bindings[name] = class
 		}
 	}
-	clean := maskSource(record.body)
+	clean := record.maskedBody
 	for _, match := range typedBindingPattern.FindAllStringSubmatch(clean, -1) {
 		if class := record.file.classAliases[match[2]]; class != nil {
 			bindings[match[1]] = class
@@ -677,12 +945,12 @@ func receiverBindings(record *symbolRecord) map[string]*classInfo {
 
 func resolveModule(from, module string, files map[string]*sourceFile) *sourceFile {
 	base := filepath.ToSlash(filepath.Join(filepath.Dir(from), module))
-	for extension := range supportedExtensions {
+	for _, extension := range moduleExtensions {
 		if file := files[base+extension]; file != nil {
 			return file
 		}
 	}
-	for extension := range supportedExtensions {
+	for _, extension := range moduleExtensions {
 		if file := files[base+"/index"+extension]; file != nil {
 			return file
 		}
@@ -690,53 +958,116 @@ func resolveModule(from, module string, files map[string]*sourceFile) *sourceFil
 	return files[base]
 }
 
-func expressionEnd(source string, start int) int {
+// expressionEnd finds where a callable body ends: its matching block brace
+// when the body opens with one, otherwise the next semicolon or line break.
+func expressionEnd(file *sourceFile, start int) int {
+	source := file.src
 	if start < 0 || start >= len(source) {
 		return len(source)
 	}
-	if open := strings.Index(source[start:], "{"); open >= 0 && open < 8 {
-		if end := matchingBrace(maskSource(source), start+open); end >= 0 {
+
+	window := source[start:min(len(source), start+arrowBodyBraceWindow)]
+	if open := strings.IndexByte(window, '{'); open >= 0 {
+		if end := file.matchingBrace(start + open); end >= 0 {
 			return end + 1
 		}
 	}
-	if end := strings.IndexByte(source[start:], ';'); end >= 0 {
-		return start + end + 1
+	if end := firstAtOrAfter(file.semicolons, start); end >= 0 {
+		return end + 1
 	}
-	if end := strings.IndexByte(source[start:], '\n'); end >= 0 {
-		return start + end
+	if line := firstAtOrAfter(file.lineStarts, start+1); line >= 0 {
+		return line - 1
 	}
 	return len(source)
 }
-func matchingBrace(source string, open int) int {
-	if open < 0 || open >= len(source) || source[open] != '{' {
-		return -1
+
+// prepareSource computes the per-file indexes that keep extraction linear.
+// Operations (Pure): derives indexes from explicit source text.
+func prepareSource(file *sourceFile) {
+	if file.braces != nil {
+		return
 	}
-	depth := 0
-	for index := open; index < len(source); index++ {
-		switch source[index] {
-		case '{':
-			depth++
-		case '}':
-			depth--
-			if depth == 0 {
-				return index
-			}
+
+	file.masked = maskSource(file.src)
+	file.lineStarts = []int{0}
+	file.semicolons = make([]int, 0)
+	for index := 0; index < len(file.src); index++ {
+		switch file.src[index] {
+		case '\n':
+			file.lineStarts = append(file.lineStarts, index+1)
+		case ';':
+			file.semicolons = append(file.semicolons, index)
 		}
+	}
+	file.braces = matchBraces(file.masked)
+}
+
+// matchBraces pairs every balanced brace in one pass.
+// Operations (Pure): indexes explicit masked source.
+func matchBraces(masked string) map[int]int {
+	pairs := make(map[int]int)
+	open := make([]int, 0)
+	for index := 0; index < len(masked); index++ {
+		switch masked[index] {
+		case '{':
+			open = append(open, index)
+		case '}':
+			if len(open) == 0 {
+				continue
+			}
+			pairs[open[len(open)-1]] = index
+			open = open[:len(open)-1]
+		}
+	}
+	return pairs
+}
+
+// matchingBrace returns the index of the brace closing the one at open, or -1.
+func (file *sourceFile) matchingBrace(open int) int {
+	if end, ok := file.braces[open]; ok {
+		return end
 	}
 	return -1
 }
-func braceDepth(source string) int {
-	depth := 0
-	for index := range source {
-		if source[index] == '{' {
-			depth++
-		}
-		if source[index] == '}' {
-			depth--
+
+// lineAt returns the one-based line containing offset.
+func (file *sourceFile) lineAt(offset int) int {
+	offset = min(offset, len(file.src))
+	return sort.Search(len(file.lineStarts), func(index int) bool { return file.lineStarts[index] > offset })
+}
+
+// firstAtOrAfter returns the first sorted position at or after offset, or -1.
+func firstAtOrAfter(positions []int, offset int) int {
+	index := sort.SearchInts(positions, offset)
+	if index == len(positions) {
+		return -1
+	}
+	return positions[index]
+}
+
+// braceCursor reports brace depth at increasing offsets without rescanning
+// the text before each query.
+type braceCursor struct {
+	text     string
+	position int
+	depth    int
+}
+
+func (cursor *braceCursor) at(offset int) int {
+	if offset < cursor.position {
+		cursor.position, cursor.depth = 0, 0
+	}
+	for ; cursor.position < offset; cursor.position++ {
+		switch cursor.text[cursor.position] {
+		case '{':
+			cursor.depth++
+		case '}':
+			cursor.depth--
 		}
 	}
-	return depth
+	return cursor.depth
 }
+
 func maskSource(source string) string {
 	output := []byte(source)
 	for index := 0; index < len(output); {
@@ -812,7 +1143,17 @@ func simpleType(value string) string {
 	return ""
 }
 func isSimpleType(value string) bool {
-	return regexp.MustCompile(`^[A-Za-z_$][A-Za-z0-9_$]*$`).MatchString(value)
+	if value == "" {
+		return false
+	}
+	for index := 0; index < len(value); index++ {
+		character := value[index]
+		letter := character == '_' || character == '$' || (character >= 'a' && character <= 'z') || (character >= 'A' && character <= 'Z')
+		if !letter && (index == 0 || character < '0' || character > '9') {
+			return false
+		}
+	}
+	return true
 }
 func precededByDot(source string, offset int) bool {
 	for offset > 0 && (source[offset-1] == ' ' || source[offset-1] == '\t' || source[offset-1] == '\n') {
@@ -821,11 +1162,13 @@ func precededByDot(source string, offset int) bool {
 	return offset > 0 && source[offset-1] == '.'
 }
 func knownNonCall(name string) bool { return name == "require" || name == "super" }
-func lineAt(source string, offset int) int {
-	return strings.Count(source[:min(offset, len(source))], "\n") + 1
-}
 func commentStart(source string, start int) int {
 	prefix := source[:start]
+	// Only a comment that ends right before the declaration can attach to it;
+	// checking that first avoids searching the whole prefix for every symbol.
+	if !strings.HasSuffix(strings.TrimRight(prefix, " \t\r\n\f\v"), "*/") {
+		return start
+	}
 	if index := strings.LastIndex(prefix, "/**"); index >= 0 && strings.TrimSpace(prefix[index+2:]) != "" && strings.HasSuffix(strings.TrimSpace(prefix[index:]), "*/") {
 		return index
 	}
@@ -834,7 +1177,7 @@ func commentStart(source string, start int) int {
 func jsDoc(source string, start int) string {
 	segment := source[max(0, start-2048):start]
 	begin, end := strings.LastIndex(segment, "/**"), strings.LastIndex(segment, "*/")
-	if begin < 0 || end < begin {
+	if begin < 0 || end < begin+len("/**") {
 		return ""
 	}
 	return strings.TrimSpace(strings.Trim(strings.ReplaceAll(strings.ReplaceAll(segment[begin+3:end], "\n *", "\n"), "\r", ""), "* \n"))
@@ -851,10 +1194,6 @@ func parameterList(value string) []string {
 }
 func isTestFile(path string) bool {
 	return strings.Contains(path, "/__tests__/") || strings.Contains(path, ".test.") || strings.Contains(path, ".spec.")
-}
-func keyword(value string) bool {
-	_, exists := map[string]bool{"if": true, "for": true, "while": true, "switch": true, "catch": true, "function": true, "return": true, "new": true, "typeof": true, "import": true, "export": true, "class": true}[value]
-	return exists
 }
 func min(left, right int) int {
 	if left < right {
