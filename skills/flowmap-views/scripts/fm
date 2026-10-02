@@ -1,0 +1,512 @@
+#!/usr/bin/env python3
+"""fm: the flowmap-views skill's interface to a pinned Flowmap server.
+
+Every command takes --repo (default: the current directory, resolved to its Git
+top level). `fm start` launches one Flowmap server per repository on a free
+loopback port and records it under ~/.cache/flowmap-skill/. Query commands
+print compact, root-relative text instead of raw JSON so an agent spends tokens
+on the answer, not on transport. Function source is printed only on request,
+and every request is logged as a code read.
+"""
+
+import argparse
+import hashlib
+import json
+import os
+import signal
+import socket
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+from collections import deque
+from datetime import datetime, timezone
+from pathlib import Path
+
+SKILL_DIR = Path(__file__).resolve().parent.parent
+BINARY = SKILL_DIR / "bin" / "flowmap"
+PINNED_VERSION_FILE = SKILL_DIR / "FLOWMAP_VERSION"
+STATE_ROOT = Path(os.environ.get("FLOWMAP_SKILL_STATE", "~/.cache/flowmap-skill")).expanduser()
+
+PROJECT = "default"
+HOST = "127.0.0.1"
+START_TIMEOUT_SECONDS = 60
+SCAN_TIMEOUT_SECONDS = 900
+QUERY_TIMEOUT_SECONDS = 120
+DEFAULT_GRAPH_DEPTH = 3
+DEFAULT_GRAPH_LIMIT = 60
+SIGNATURE_WIDTH = 100
+DOC_NAMES = {"MAP.md", "OVERVIEW.md", "ARCHITECTURE.md", "AGENTS.md", "CLAUDE.md", "CONTRIBUTING.md"}
+DOC_DIRECTORIES = ("docs/", "doc/", "adr/", "architecture/")
+DOC_LIMIT = 80
+UNIVERSAL_CONTRACTS = {"context.Context", "error"}
+SKIPPED_DIRECTORIES = {".git", "node_modules", "vendor", "dist", "build", "coverage", ".next", "out"}
+
+
+class FmError(Exception):
+    """A failure to report to the agent without a traceback."""
+
+
+# Side Effect (Edge): repository and state resolution.
+
+
+def repository_root(path):
+    candidate = Path(path).expanduser().resolve()
+    if not candidate.is_dir():
+        raise FmError(f"{candidate} is not a directory")
+
+    result = subprocess.run(["git", "-C", str(candidate), "rev-parse", "--show-toplevel"], capture_output=True, text=True)
+    if result.returncode == 0:
+        return Path(result.stdout.strip()).resolve()
+    return candidate
+
+
+def state_dir(root):
+    digest = hashlib.sha1(str(root).encode()).hexdigest()[:10]
+    return STATE_ROOT / f"{root.name}-{digest}"
+
+
+def read_state(root):
+    path = state_dir(root) / "server.json"
+    if not path.exists():
+        return None
+    return json.loads(path.read_text())
+
+
+def pinned_version():
+    return PINNED_VERSION_FILE.read_text().strip().lstrip("v")
+
+
+def installed_version():
+    if not BINARY.exists():
+        raise FmError(f"Flowmap binary missing at {BINARY}; run the skill installer (make install-skill in the Flowmap repository)")
+
+    result = subprocess.run([str(BINARY), "version"], capture_output=True, text=True)
+    return result.stdout.strip().lstrip("v")
+
+
+def process_alive(pid):
+    try:
+        os.kill(pid, 0)
+    except (ProcessLookupError, PermissionError):
+        return False
+    return True
+
+
+# Side Effect (Edge): HTTP calls to the local Flowmap server.
+
+
+def request(base_url, method, path, timeout=QUERY_TIMEOUT_SECONDS, **params):
+    query = urllib.parse.urlencode({key: value for key, value in params.items() if value is not None})
+    url = f"{base_url}{path}?{query}" if query else f"{base_url}{path}"
+    try:
+        with urllib.request.urlopen(urllib.request.Request(url, method=method), timeout=timeout) as response:
+            return json.load(response)
+    except urllib.error.HTTPError as error:
+        try:
+            detail = json.load(error).get("error", "")
+        except (ValueError, AttributeError):
+            detail = ""
+        raise FmError(f"{method} {path}: HTTP {error.code} {detail}".strip()) from error
+    except urllib.error.URLError as error:
+        raise FmError(f"Flowmap server unreachable at {base_url}; run fm start") from error
+
+
+def server_healthy(base_url):
+    try:
+        request(base_url, "GET", "/api/projects", timeout=2)
+    except FmError:
+        return False
+    return True
+
+
+class Session:
+    """A running Flowmap server for one repository."""
+
+    def __init__(self, root, state):
+        self.root = root
+        self.base_url = state["url"]
+        self.languages = None
+
+    def get(self, path, **params):
+        return request(self.base_url, "GET", path, project=PROJECT, **params)
+
+    def language(self, requested):
+        if self.languages is None:
+            projects = request(self.base_url, "GET", "/api/projects")
+            self.languages = [entry["language"] for entry in projects[0]["languages"]]
+
+        if requested:
+            if requested not in self.languages:
+                raise FmError(f"language {requested} not analyzed here; available: {', '.join(self.languages)}")
+            return requested
+        if len(self.languages) == 1:
+            return self.languages[0]
+        raise FmError(f"this repository has several languages; pass --lang {' or --lang '.join(self.languages)}")
+
+    def relative(self, path):
+        for prefix in {str(self.root), os.path.realpath(self.root)}:
+            if path.startswith(prefix + "/"):
+                return path[len(prefix) + 1:]
+        return path
+
+
+def open_session(root):
+    state = read_state(root)
+    if state is None or not process_alive(state["pid"]) or not server_healthy(state["url"]):
+        raise FmError(f"no Flowmap server for {root}; run fm start")
+    return Session(root, state)
+
+
+# Commands.
+
+
+def cmd_start(args):
+    root = repository_root(args.repo)
+    expected = pinned_version()
+    actual = installed_version()
+    if actual != expected:
+        raise FmError(f"skill pins Flowmap {expected} but bin/flowmap is {actual or 'unknown'}; reinstall the skill")
+
+    if (root / "go.mod").exists() and subprocess.run(["go", "env", "GOVERSION"], capture_output=True).returncode != 0:
+        print("warning: go.mod found but no Go toolchain on PATH; Go analysis will fail", file=sys.stderr)
+
+    directory = state_dir(root)
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / "views").mkdir(exist_ok=True)
+
+    state = read_state(root)
+    if state and process_alive(state["pid"]) and server_healthy(state["url"]):
+        print(f"reusing Flowmap {expected} at {state['url']} for {root}")
+    else:
+        state = launch(root, directory)
+        print(f"started Flowmap {expected} at {state['url']} for {root}")
+
+    projects = request(state["url"], "GET", "/api/projects")
+    for entry in projects[0]["languages"]:
+        if entry["status"] == "ready":
+            print(f"  {entry['language']}: {entry.get('function_count', 0)} functions (ready)")
+            continue
+
+        scan = request(state["url"], "POST", f"/api/projects/{PROJECT}/languages/{entry['language']}/scan", timeout=SCAN_TIMEOUT_SECONDS)
+        diagnostics = len((scan.get("load_report") or {}).get("diagnostics") or [])
+        print(f"  {entry['language']}: {scan.get('function_count', 0)} functions, {diagnostics} load diagnostics")
+
+    print(f"views directory: {directory / 'views'}")
+    print(f"workbench: {state['url']}")
+
+
+def launch(root, directory):
+    with socket.socket() as probe:
+        probe.bind((HOST, 0))
+        port = probe.getsockname()[1]
+
+    url = f"http://{HOST}:{port}"
+    log = open(directory / "server.log", "ab")
+    process = subprocess.Popen(
+        [str(BINARY), "serve", str(root), "--addr", f"{HOST}:{port}"],
+        cwd=root,
+        stdout=log,
+        stderr=log,
+        stdin=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+
+    deadline = time.monotonic() + START_TIMEOUT_SECONDS
+    while not server_healthy(url):
+        if process.poll() is not None:
+            raise FmError(f"Flowmap exited during startup; see {directory / 'server.log'}")
+        if time.monotonic() > deadline:
+            process.terminate()
+            raise FmError(f"Flowmap did not answer within {START_TIMEOUT_SECONDS}s; see {directory / 'server.log'}")
+        time.sleep(0.25)
+
+    state = {"pid": process.pid, "url": url, "root": str(root), "version": pinned_version(), "started": now()}
+    (directory / "server.json").write_text(json.dumps(state, indent=2))
+    return state
+
+
+def cmd_stop(args):
+    roots = [Path(json.loads(path.read_text())["root"]) for path in STATE_ROOT.glob("*/server.json")] if args.all else [repository_root(args.repo)]
+    for root in roots:
+        state = read_state(root)
+        if state is None:
+            print(f"no server recorded for {root}")
+            continue
+
+        if process_alive(state["pid"]):
+            os.kill(state["pid"], signal.SIGTERM)
+        (state_dir(root) / "server.json").unlink()
+        print(f"stopped Flowmap for {root}")
+
+
+def cmd_status(args):
+    found = False
+    for path in sorted(STATE_ROOT.glob("*/server.json")):
+        state = json.loads(path.read_text())
+        alive = process_alive(state["pid"]) and server_healthy(state["url"])
+        print(f"{'running' if alive else 'dead   '}  {state['url']}  {state['root']}  (Flowmap {state['version']})")
+        found = True
+    if not found:
+        print("no Flowmap servers recorded")
+
+
+def cmd_rescan(args):
+    session = open_session(repository_root(args.repo))
+    selected = session.language(args.lang) if args.lang else None
+
+    projects = request(session.base_url, "GET", "/api/projects")
+    for entry in projects[0]["languages"]:
+        if selected and entry["language"] != selected:
+            continue
+
+        scan = request(session.base_url, "POST", f"/api/projects/{PROJECT}/languages/{entry['language']}/scan", timeout=SCAN_TIMEOUT_SECONDS)
+        print(f"{entry['language']}: {scan.get('function_count', 0)} functions")
+
+
+def cmd_docs(args):
+    root = repository_root(args.repo)
+    result = subprocess.run(["git", "-C", str(root), "ls-files", "-co", "--exclude-standard", "*.md"], capture_output=True, text=True)
+    if result.returncode == 0:
+        paths = result.stdout.splitlines()
+    else:
+        paths = [str(p.relative_to(root)) for p in root.rglob("*.md") if not SKIPPED_DIRECTORIES.intersection(p.relative_to(root).parts)]
+
+    selected = sorted(path for path in set(paths) if is_architecture_doc(path))
+    for path in selected[:DOC_LIMIT]:
+        lines = (root / path).read_text(errors="replace").splitlines()
+        heading = next((line.lstrip("# ").strip() for line in lines if line.startswith("#")), "")
+        print(f"{len(lines):5d}  {path}  — {heading}")
+    if len(selected) > DOC_LIMIT:
+        print(f"... {len(selected) - DOC_LIMIT} more; narrow with grep on this list")
+
+
+def is_architecture_doc(path):
+    """Operations (Pure): keep maps, overviews, and design docs; drop vendored and changelog noise."""
+    parts = path.split("/")
+    if SKIPPED_DIRECTORIES.intersection(parts):
+        return False
+    if parts[-1] in DOC_NAMES or path == "README.md":
+        return True
+    return path.startswith(DOC_DIRECTORIES) and parts[-1].upper() != "CHANGELOG.MD"
+
+
+def cmd_search(args):
+    session = open_session(repository_root(args.repo))
+    language = session.language(args.lang)
+    results = session.get("/api/search", language=language, q=args.query, tests=str(args.tests).lower())
+    if not results:
+        print(f"no {language} symbols named like {args.query!r}; search matches symbol names only (use fm docs or grep for routes and strings)")
+        return
+
+    for item in results:
+        signature = item.get("signature", "")
+        if len(signature) > SIGNATURE_WIDTH:
+            signature = signature[: SIGNATURE_WIDTH - 1] + "…"
+        test = " test" if item.get("test") else ""
+        print(f"{item['id']}  {item['qualified_name']}  [{item.get('classification', '?')}{test}]  {signature}")
+
+
+def cmd_graph(args):
+    session = open_session(repository_root(args.repo))
+    language = session.language(args.lang)
+    graph = session.get("/api/graph", language=language, root=args.id, direction=args.direction, depth=args.depth, tests=str(args.tests).lower())
+    nodes = {node["id"]: node for node in graph["nodes"]}
+    if args.id not in nodes:
+        raise FmError(f"symbol {args.id} not found in the {language} graph")
+
+    distances = bfs_distances(args.id, graph["edges"], args.direction)
+    ordered = sorted(nodes.values(), key=lambda node: (distances.get(node["id"], 99), node["qualified_name"]))
+    shown = ordered[: args.limit]
+    shown_ids = {node["id"] for node in shown}
+    edges = [edge for edge in graph["edges"] if edge["caller_id"] in shown_ids and edge["callee_id"] in shown_ids]
+
+    root = nodes[args.id]
+    print(f"root {root['qualified_name']} ({args.id})  {language} {args.direction} depth={args.depth}  nodes={len(nodes)} edges={len(graph['edges'])}")
+    print("NODES  (hops  id  symbol  location  class)")
+    for node in shown:
+        flags = " public" if node.get("public") else ""
+        location = f"{session.relative(node['file'])}:{node['line']}"
+        print(f"  {distances.get(node['id'], '?'):>2}  {node['id']}  {node['qualified_name']}  {location}  [{node['classification']['kind']}{flags}]")
+    if len(ordered) > len(shown):
+        print(f"  ... {len(ordered) - len(shown)} more nodes beyond --limit {args.limit}; lower --depth or walk from a deeper node")
+
+    print("EDGES  (caller -> callee)")
+    for edge in edges:
+        detail = edge["kind"] + (" dynamic" if edge.get("dynamic") else "")
+        site = f"  @{session.relative(edge['call_site'])}" if edge.get("call_site") else ""
+        print(f"  {nodes[edge['caller_id']]['qualified_name']} -> {nodes[edge['callee_id']]['qualified_name']}  [{detail}]{site}")
+
+
+def bfs_distances(root_id, edges, direction):
+    """Operations (Pure): hop distance from the root along the requested direction."""
+    neighbours = {}
+    for edge in edges:
+        if direction in ("downstream", "both"):
+            neighbours.setdefault(edge["caller_id"], []).append(edge["callee_id"])
+        if direction in ("upstream", "both"):
+            neighbours.setdefault(edge["callee_id"], []).append(edge["caller_id"])
+
+    distances = {root_id: 0}
+    queue = deque([root_id])
+    while queue:
+        current = queue.popleft()
+        for neighbour in neighbours.get(current, []):
+            if neighbour not in distances:
+                distances[neighbour] = distances[current] + 1
+                queue.append(neighbour)
+    return distances
+
+
+def cmd_symbol(args):
+    root = repository_root(args.repo)
+    session = open_session(root)
+    language = session.language(args.lang)
+    symbol = session.get(f"/api/functions/{args.id}", language=language)
+
+    print(f"{symbol['qualified_name']}  ({symbol.get('kind', 'function')}, {language})")
+    print(f"  signature: {symbol.get('signature', '')}")
+    print(f"  location:  {session.relative(symbol['file'])}:{symbol['line']}-{symbol.get('end_line', symbol['line'])}")
+    print(f"  public:    {symbol.get('public', False)}   test: {symbol.get('test', False)}")
+    classification = symbol.get("classification", {})
+    print(f"  class:     {classification.get('kind', '?')} ({classification.get('provenance', '?')}): {', '.join(classification.get('evidence', []))}")
+    if symbol.get("intent"):
+        print(f"  intent:    {symbol['intent'].strip()}")
+    for contract in symbol.get("contracts") or []:
+        if contract["name"] in UNIVERSAL_CONTRACTS:
+            continue
+        print(f"  contract:  {contract_summary(contract)}")
+    if symbol.get("change"):
+        print(f"  git:       {symbol['change']['kind']}")
+
+    if args.source:
+        log_code_read(root, symbol)
+        print("SOURCE")
+        print(symbol.get("source", "(no source available)"))
+
+
+def contract_summary(contract):
+    """Operations (Pure): one line listing a contract's exported fields or method names."""
+    fields = [f"{field['name']} {field['type']}" for field in contract.get("fields") or [] if field["name"][:1].isupper()]
+    methods = [method.split(")", 1)[-1].split("(", 1)[0].strip(" .") or method for method in contract.get("methods") or []]
+    members = fields or methods
+    return f"{contract['kind']} {contract['name']} {{{', '.join(members)}}}"
+
+
+def log_code_read(root, symbol):
+    with open(state_dir(root) / "code-reads.log", "a") as log:
+        log.write(f"{now()}\t{symbol['id']}\t{symbol['qualified_name']}\n")
+
+
+def cmd_boundary(args):
+    session = open_session(repository_root(args.repo))
+    language = session.language(args.lang)
+    prefix = args.path.strip("/")
+    listing = session.get("/api/files", language=language)
+
+    matched = 0
+    for file in listing["files"]:
+        if prefix and not (file["path"] == prefix or file["path"].startswith(prefix + "/")):
+            continue
+        functions = [fn for fn in file["functions"] if (fn["public"] or args.all) and not fn["test"]]
+        if not functions:
+            continue
+
+        print(file["path"])
+        for fn in sorted(functions, key=lambda item: item["line"]):
+            visibility = "" if fn["public"] else " private"
+            print(f"  {fn['id']}  {fn['qualified_name']}  :{fn['line']}  [{fn['classification']}{visibility}]")
+            matched += 1
+
+    if matched == 0:
+        print(f"no {'functions' if args.all else 'public functions'} under {prefix or '/'} in the {language} view")
+
+
+def cmd_check(args):
+    root = repository_root(args.repo)
+    session = open_session(root)
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import check_view
+
+    return check_view.main([str(args.view), "--server", session.base_url, "--project", PROJECT, "--root", str(root)])
+
+
+def cmd_views(args):
+    root = repository_root(args.repo)
+    directory = state_dir(root) / "views"
+    directory.mkdir(parents=True, exist_ok=True)
+    print(directory)
+
+
+def cmd_reads(args):
+    log = state_dir(repository_root(args.repo)) / "code-reads.log"
+    print(log.read_text() if log.exists() else "no source reads logged")
+
+
+def now():
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def parser():
+    common = argparse.ArgumentParser(add_help=False)
+    common.add_argument("--repo", default=".", help="repository path (default: current directory)")
+
+    language = argparse.ArgumentParser(add_help=False)
+    language.add_argument("--lang", help="go or javascript; required when a repository has both")
+
+    root = argparse.ArgumentParser(prog="fm", description=__doc__.splitlines()[0])
+    commands = root.add_subparsers(dest="command", required=True)
+
+    commands.add_parser("start", parents=[common], help="start or reuse this repository's Flowmap server").set_defaults(run=cmd_start)
+    stop = commands.add_parser("stop", parents=[common], help="stop this repository's server")
+    stop.add_argument("--all", action="store_true", help="stop every recorded server")
+    stop.set_defaults(run=cmd_stop)
+    commands.add_parser("status", help="list recorded servers").set_defaults(run=cmd_status)
+    commands.add_parser("rescan", parents=[common, language], help="re-analyze after code changes").set_defaults(run=cmd_rescan)
+    commands.add_parser("docs", parents=[common], help="list architecture docs with line counts").set_defaults(run=cmd_docs)
+
+    search = commands.add_parser("search", parents=[common, language], help="find symbols by name")
+    search.add_argument("query")
+    search.add_argument("--tests", action="store_true")
+    search.set_defaults(run=cmd_search)
+
+    graph = commands.add_parser("graph", parents=[common, language], help="compact call/dependency neighborhood")
+    graph.add_argument("id")
+    graph.add_argument("--direction", choices=("downstream", "upstream", "both"), default="downstream")
+    graph.add_argument("--depth", type=int, default=DEFAULT_GRAPH_DEPTH)
+    graph.add_argument("--limit", type=int, default=DEFAULT_GRAPH_LIMIT)
+    graph.add_argument("--tests", action="store_true")
+    graph.set_defaults(run=cmd_graph)
+
+    symbol = commands.add_parser("symbol", parents=[common, language], help="symbol facts; --source is a logged code read")
+    symbol.add_argument("id")
+    symbol.add_argument("--source", action="store_true")
+    symbol.set_defaults(run=cmd_symbol)
+
+    boundary = commands.add_parser("boundary", parents=[common, language], help="public functions declared under a directory")
+    boundary.add_argument("path", nargs="?", default="")
+    boundary.add_argument("--all", action="store_true", help="include non-public functions")
+    boundary.set_defaults(run=cmd_boundary)
+
+    check = commands.add_parser("check", parents=[common], help="verify a view and render it to HTML")
+    check.add_argument("view", type=Path)
+    check.set_defaults(run=cmd_check)
+
+    commands.add_parser("views", parents=[common], help="print this repository's views directory").set_defaults(run=cmd_views)
+    commands.add_parser("reads", parents=[common], help="print logged source reads").set_defaults(run=cmd_reads)
+    return root
+
+
+def main():
+    args = parser().parse_args()
+    try:
+        return args.run(args) or 0
+    except FmError as error:
+        print(f"fm: {error}", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

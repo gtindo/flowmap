@@ -34,7 +34,9 @@ flowmap/
 ├── internal/server/         # HTTP adapter over the engine protocol and embedded web app
 │   └── static/              # Browser workbench and PWA assets
 ├── internal/telemetry/      # Optional OpenTelemetry traces, metrics, and log export setup
-├── scripts/                 # Compatibility and release automation
+├── skills/                  # Agent skills shipped from this repository
+│   └── flowmap-views/       # Claude Code skill: docs + pinned Flowmap graph -> verified flow views
+├── scripts/                 # Compatibility, release, and skill installation automation
 ├── docs/                    # Documentation-site configuration and technical design docs
 ├── captures/                # README screenshots
 ├── README.md                # Product and contributor overview
@@ -72,6 +74,10 @@ Owns protocol lifecycle, workspaces and language views, one-analysis-per-view sc
 ### `internal/server/` — Local Workbench Adapter
 
 Translates the browser's JSON endpoints into engine protocol requests, waits for analysis notifications during scans, and serves the embedded browser application. See [`internal/server/MAP.md`](internal/server/MAP.md).
+
+### `skills/flowmap-views/` — Claude Code Skill
+
+A global agent skill that answers architecture questions by reading a repository's docs and querying a pinned Flowmap release over the local HTTP API. `SKILL.md` holds the method and the code-fallback policy. `scripts/fm` is the only interface the skill uses: it manages one server per repository under `~/.cache/flowmap-skill/` and prints compact, root-relative query results. `scripts/check_view.py` verifies flow views against the graph and renders them, and `reference/view-format.md` defines the view JSON and gap classes. `FLOWMAP_VERSION` pins the release that `scripts/install-skill.sh` downloads, verifies, and installs with the skill. The skill depends on the browser HTTP API, so API changes must update `scripts/fm` and the pinned version together.
 
 ### `internal/telemetry/` — Optional Telemetry Edge
 
@@ -111,6 +117,7 @@ A scan builds a replacement snapshot beside the view's current one and publishes
 - For telemetry startup, OTLP exporter wiring, or structured log bridging, start in `internal/telemetry/`.
 - For toolchain compatibility behavior, also inspect `scripts/compatibility-smoke.sh` and the analyzer fixture modules.
 - For release packaging, inspect `Makefile`, `scripts/release.sh`, and `.github/workflows/`.
+- For the Claude Code skill, start in `skills/flowmap-views/SKILL.md`, then `scripts/fm` and `scripts/install-skill.sh`.
 
 ## Map Maintenance
 

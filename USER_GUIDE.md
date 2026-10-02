@@ -126,6 +126,20 @@ The server binds to localhost by default and is not exposed to other machines. S
 
 `flowmap engine` runs Flowmap's analysis engine without a web server. It speaks an experimental JSON-RPC protocol on standard input and output and is meant to be launched by editor or IDE extensions, not run by hand. Logs go to standard error. Add `--summarizer-command` to enable generated summaries, exactly as with `serve`.
 
+### Claude Code Skill for Architecture Questions (Experimental)
+
+The `flowmap-views` skill lets Claude Code answer architecture questions about a Go or JavaScript/TypeScript repository, such as how a feature is implemented, what a package exposes, or what reaches a function. It reads the repository's architecture docs, queries a pinned Flowmap server, reads source only as a fallback, and produces a verified flow view rendered as HTML.
+
+Install it globally from a Flowmap checkout:
+
+```sh
+make install-skill
+```
+
+The installer downloads the release named in `skills/flowmap-views/FLOWMAP_VERSION`, verifies it against `SHA256SUMS`, and installs the skill with that binary into `~/.claude/skills/flowmap-views`. Set `CLAUDE_SKILLS_DIR` to install elsewhere. Go repositories still need a supported Go toolchain on `PATH`.
+
+The skill starts one local server per repository on a free loopback port and keeps its state and views under `~/.cache/flowmap-skill/`, so it never writes into the analyzed repository. Ask Claude to stop the servers when you are done, or run `~/.claude/skills/flowmap-views/scripts/fm stop --all`.
+
 ## Add Flowmap to the macOS Dock
 
 While Flowmap is running, open `http://127.0.0.1:7878` in your browser:

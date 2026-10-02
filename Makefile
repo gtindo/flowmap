@@ -6,7 +6,7 @@ PACKAGE := ./cmd/flowmap
 DIST := dist/$(RELEASE_VERSION)
 LDFLAGS := -s -w -X main.version=$(RELEASE_VERSION)
 
-.PHONY: build fmt lint test release linux-amd64 darwin-arm64 darwin-amd64 verify-release-toolchain checksums
+.PHONY: build fmt lint test release linux-amd64 darwin-arm64 darwin-amd64 verify-release-toolchain checksums install-skill
 
 build:
 	go build -trimpath -ldflags "$(LDFLAGS)" -o $(BINARY) $(PACKAGE)
@@ -20,6 +20,9 @@ lint:
 
 test:
 	go test ./...
+
+install-skill:
+	scripts/install-skill.sh
 
 release: test linux-amd64 darwin-arm64 darwin-amd64 verify-release-toolchain checksums
 	@echo "Release $(RELEASE_VERSION) is ready in $(DIST)"
