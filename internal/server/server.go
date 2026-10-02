@@ -12,6 +12,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"net/http"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -193,6 +194,7 @@ func (app *App) Handler() http.Handler {
 	mux.HandleFunc("POST /api/projects/{name}/scan", app.handleProjectScan)
 	mux.HandleFunc("POST /api/projects/{name}/languages/{language}/scan", app.handleLanguageScan)
 	mux.HandleFunc("GET /api/search", app.handleSearch)
+	mux.HandleFunc("GET /api/files", app.handleFiles)
 	mux.HandleFunc("GET /api/graph", app.handleGraph)
 	mux.HandleFunc("GET /api/functions/{id}", app.handleFunction)
 	mux.HandleFunc("GET /api/git-status", app.handleGitStatus)
@@ -528,6 +530,34 @@ func (app *App) handleSearch(response http.ResponseWriter, request *http.Request
 	writeJSON(response, http.StatusOK, searchResults(page.Items))
 }
 
+// handleFiles serves the browser file explorer: project files from the
+// filesystem merged with every analyzed function grouped by declaring file.
+// A file listing failure degrades to analyzed files only.
+func (app *App) handleFiles(response http.ResponseWriter, request *http.Request) {
+	entry, query, err := app.language(request.Context(), request.URL.Query().Get("project"), request.URL.Query().Get("language"))
+	if err != nil {
+		writeError(response, httpStatus(err), err)
+		return
+	}
+
+	symbols, err := app.allSymbols(request.Context(), query)
+	if err != nil {
+		writeError(response, httpStatus(err), err)
+		return
+	}
+
+	paths, truncated, err := listProjectFiles(request.Context(), entry.root)
+	if err != nil {
+		slog.WarnContext(request.Context(), "list project files failed", "project", entry.name, "error", err)
+	}
+
+	roots := []string{entry.root}
+	if resolved, resolveErr := filepath.EvalSymlinks(entry.root); resolveErr == nil && resolved != entry.root {
+		roots = append(roots, resolved)
+	}
+	writeJSON(response, http.StatusOK, ExplorerResponse{Files: fileListing(roots, paths, symbols), Truncated: truncated})
+}
+
 func (app *App) handleGraph(response http.ResponseWriter, request *http.Request) {
 	entry, query, err := app.language(request.Context(), request.URL.Query().Get("project"), request.URL.Query().Get("language"))
 	if err != nil {
@@ -601,6 +631,24 @@ func (app *App) handleSummary(response http.ResponseWriter, request *http.Reques
 		return
 	}
 	writeJSON(response, http.StatusOK, result)
+}
+
+// allSymbols collects every page of named symbols, including tests.
+func (app *App) allSymbols(ctx context.Context, query protocol.SnapshotQuery) ([]protocol.SymbolSummary, error) {
+	params := protocol.SymbolSearchParams{SnapshotQuery: query, IncludeTests: true, Page: &protocol.Page{Limit: protocol.MaxPageLimit}}
+	symbols := make([]protocol.SymbolSummary, 0)
+	for {
+		page, err := app.client.SearchSymbols(ctx, params)
+		if err != nil {
+			return nil, err
+		}
+
+		symbols = append(symbols, page.Items...)
+		if page.NextCursor == "" {
+			return symbols, nil
+		}
+		params.Page.Cursor = page.NextCursor
+	}
 }
 
 // gitStatus collects every page of captured Git changes.

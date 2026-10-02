@@ -404,7 +404,7 @@ func TestRescanReturnsLoadReportThroughEngine(t *testing.T) {
 
 func TestUnscannedAndUnknownResourcesReturnNotFound(t *testing.T) {
 	app := newTestApp(t, []ProjectConfig{{Name: "only", Analysis: analyzer.Config{Root: "/work/project"}}}, engine.Options{})
-	for _, path := range []string{"/api/search?q=x", "/api/search?project=missing", "/api/functions/root"} {
+	for _, path := range []string{"/api/search?q=x", "/api/search?project=missing", "/api/functions/root", "/api/files", "/api/files?project=missing"} {
 		response := httptest.NewRecorder()
 		app.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, path, nil))
 		if response.Code != http.StatusNotFound {

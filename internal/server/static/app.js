@@ -36,6 +36,14 @@ const languagePreferenceKey = "flowmap-language:v1";
 const themePreferenceKey = "flowmap-theme:v1";
 const themePreferences = new Set(["system", "light", "dark"]);
 const systemTheme = window.matchMedia("(prefers-color-scheme: dark)");
+const explorerOpenKey = "flowmap-explorer-open:v1";
+const explorerNarrowQuery = window.matchMedia("(max-width: 820px)");
+let explorerFiles = [];
+let explorerTree;
+let explorerTruncated = false;
+let explorerExpanded = new Set();
+let explorerFunctionFiles = new Map();
+let explorerGeneration = 0;
 const detailMinWidth = 320;
 const detailViewportMargin = 48;
 let preferredDetailWidth = readDetailWidth();
@@ -233,6 +241,9 @@ $("detail-resize").addEventListener("pointermove", resizeDetail);
 $("detail-resize").addEventListener("pointerup", finishDetailResize);
 $("detail-resize").addEventListener("pointercancel", finishDetailResize);
 $("close").onclick = hideDetail;
+$("explorer-toggle").addEventListener("click", toggleExplorer);
+$("explorer-tree").addEventListener("keydown", handleExplorerKeydown);
+document.addEventListener("keydown", handleExplorerShortcut);
 document.addEventListener("click", event => {
   if (!event.target.closest(".search-wrap")) hideResults();
   if (!event.target.closest(".git-review")) hideChangesMenu();
@@ -245,6 +256,7 @@ window.addEventListener("resize", () => {
   if (currentGraph) applyViewport();
 });
 applyDetailWidth(preferredDetailWidth);
+setExplorerOpen(readExplorerOpen(), false);
 initializeProjects();
 
 if ("serviceWorker" in navigator) {
@@ -375,6 +387,7 @@ async function selectLanguage(language, knownLanguages) {
     }
   }
   await loadGitStatus();
+  await loadExplorer();
 }
 
 function resetProjectView() {
@@ -392,6 +405,7 @@ function resetProjectView() {
   reviewedRevision = "";
   hideDetail();
   hideResults();
+  clearExplorer();
   $("search").value = "";
   $("workspace").classList.add("hidden");
   $("empty").classList.remove("hidden");
@@ -417,6 +431,7 @@ function visibleChangedFunctions() {
 
 function renderGitStatus(status) {
   if (status) gitSnapshot = status;
+  renderExplorer();
   const review = $("git-review");
   if (!gitSnapshot || !gitSnapshot.available) {
     review.classList.add("hidden");
@@ -531,6 +546,7 @@ function showEmptyAfterRescan() {
   $("workspace").classList.add("hidden");
   $("reset-layout").classList.add("hidden");
   $("empty").classList.remove("hidden");
+  renderExplorer();
   $("empty").querySelector("h1").textContent = "That function is no longer in the codebase.";
   $("empty").querySelector("p").textContent = "Search for another function to begin a refreshed graph.";
   $("search").focus();
@@ -557,6 +573,7 @@ async function rescanCodebase() {
       await search();
     }
     const failures = result.load_report.failed_units || result.load_report.failed_package_variants || result.load_report.FailedPackageVariants || 0;
+    await loadExplorer();
     rescanLabel.textContent = failures ? `Rescanned (${failures} warnings)` : `Rescanned ${result.function_count}`;
     setTimeout(() => { if (!rescanButton.disabled) rescanLabel.textContent = previousLabel; }, 1800);
   } catch (error) {
@@ -614,6 +631,7 @@ async function focusGraph(id, qualifiedName, options = {}) {
       focusHistoryIndex = focusHistory.length - 1;
     }
     updateHistoryButtons();
+    revealInExplorer(id);
   } catch (error) {
     if (generation === graphGeneration) alert(error.message);
   }
@@ -1204,4 +1222,267 @@ function renderDetail(item) {
     };
   }
   $("detail").classList.remove("hidden");
+}
+
+function readExplorerOpen() {
+  try {
+    const stored = localStorage.getItem(explorerOpenKey);
+    if (stored === "true" || stored === "false") return stored === "true";
+  } catch (_) {}
+  return !explorerNarrowQuery.matches;
+}
+
+function setExplorerOpen(open, persist = true) {
+  // Keep the graph centered while the stage width changes.
+  const center = currentGraph ? viewportCenter() : undefined;
+  $("explorer").classList.toggle("hidden", !open);
+  $("explorer-toggle").setAttribute("aria-expanded", String(open));
+  if (persist) {
+    try { localStorage.setItem(explorerOpenKey, String(open)); } catch (_) {}
+  }
+  if (center) {
+    applyViewport(false);
+    scrollViewportTo(center);
+  }
+}
+
+function toggleExplorer() {
+  setExplorerOpen($("explorer").classList.contains("hidden"));
+}
+
+function handleExplorerShortcut(event) {
+  if (!(event.metaKey || event.ctrlKey) || event.altKey || event.shiftKey || event.key.toLowerCase() !== "b") return;
+  if (event.target.closest("input, select, textarea, [contenteditable]")) return;
+  event.preventDefault();
+  toggleExplorer();
+}
+
+function clearExplorer() {
+  explorerGeneration++;
+  explorerFiles = [];
+  explorerTree = undefined;
+  explorerTruncated = false;
+  explorerExpanded = new Set();
+  explorerFunctionFiles = new Map();
+  $("explorer-project").textContent = "";
+  $("explorer-status").textContent = "";
+  $("explorer-tree").replaceChildren();
+}
+
+async function loadExplorer() {
+  const generation = ++explorerGeneration;
+  $("explorer-project").textContent = activeProject && activeLanguage ? activeProject + " · " + activeLanguage : activeProject;
+  $("explorer-status").textContent = "Loading files…";
+  try {
+    const listing = await json("/api/files");
+    if (generation !== explorerGeneration) return;
+    explorerFiles = listing.files || [];
+    explorerTruncated = Boolean(listing.truncated);
+    explorerTree = buildExplorerTree(explorerFiles);
+    explorerFunctionFiles = new Map();
+    explorerFiles.forEach(file => file.functions.forEach(item => explorerFunctionFiles.set(item.id, file.path)));
+    if (rootID) expandExplorerPath(explorerFunctionFiles.get(rootID));
+    renderExplorer();
+  } catch (error) {
+    if (generation !== explorerGeneration) return;
+    explorerFiles = [];
+    explorerTree = undefined;
+    $("explorer-tree").replaceChildren();
+    $("explorer-status").textContent = "Files unavailable: " + error.message;
+  }
+}
+
+// buildExplorerTree nests flat paths into folders and merges single-child
+// folder chains so deep Go and JS layouts stay readable.
+function buildExplorerTree(files) {
+  const root = { name: "", path: "", folders: new Map(), files: [] };
+  files.forEach(file => {
+    const segments = file.path.split("/");
+    let folder = root;
+    segments.slice(0, -1).forEach(segment => {
+      if (!folder.folders.has(segment)) {
+        const path = folder.path ? folder.path + "/" + segment : segment;
+        folder.folders.set(segment, { name: segment, path, folders: new Map(), files: [] });
+      }
+      folder = folder.folders.get(segment);
+    });
+    folder.files.push({ name: segments[segments.length - 1], path: file.path, functions: file.functions });
+  });
+  return compactExplorerFolder(root);
+}
+
+function compactExplorerFolder(folder) {
+  const folders = Array.from(folder.folders.values()).map(child => {
+    let compacted = child;
+    while (compacted.files.length === 0 && compacted.folders.size === 1) {
+      const only = compacted.folders.values().next().value;
+      compacted = { name: compacted.name + "/" + only.name, path: only.path, folders: only.folders, files: only.files };
+    }
+    return compactExplorerFolder(compacted);
+  });
+  folders.sort((left, right) => explorerNameCompare(left.name, right.name));
+  const files = folder.files.slice().sort((left, right) => explorerNameCompare(left.name, right.name));
+  return { name: folder.name, path: folder.path, folders, files };
+}
+
+function explorerFolderKey(path) { return "folder:" + path; }
+function explorerFileKey(path) { return "file:" + path; }
+
+function expandExplorerPath(filePath) {
+  if (!filePath || !explorerTree) return false;
+  let folder = explorerTree;
+  while (folder) {
+    const next = folder.folders.find(child => filePath.startsWith(child.path + "/"));
+    if (!next) break;
+    explorerExpanded.add(explorerFolderKey(next.path));
+    folder = next;
+  }
+  explorerExpanded.add(explorerFileKey(filePath));
+  return true;
+}
+
+function revealInExplorer(id) {
+  if (!expandExplorerPath(explorerFunctionFiles.get(id))) {
+    renderExplorer();
+    return;
+  }
+  renderExplorer();
+  const row = $("explorer-tree").querySelector(".explorer-row.active");
+  if (row) row.scrollIntoView({ block: "nearest" });
+}
+
+function visibleExplorerFunctions(file) {
+  const includeTests = $("tests").checked;
+  return file.functions.filter(item => includeTests || !item.test);
+}
+
+// explorerFunctionLabel drops the package (Go) or file-stem (JS) prefix that
+// the surrounding tree already shows, including a Go receiver's package.
+function explorerFunctionLabel(item, path) {
+  const qualified = item.qualified_name || item.name;
+  const stem = path.replace(/\.[^./]+$/, "");
+  if (qualified.startsWith(stem + ".")) return qualified.slice(stem.length + 1);
+  const separator = qualified.indexOf(".");
+  if (separator <= 0) return qualified;
+  const packageName = qualified.slice(0, separator);
+  const label = qualified.slice(separator + 1);
+  const receiverPrefix = "(" + (label.startsWith("(*") ? "*" : "") + packageName + ".";
+  return label.startsWith(receiverPrefix) ? receiverPrefix.slice(0, -packageName.length - 1) + label.slice(receiverPrefix.length) : label;
+}
+
+// explorerNameCompare orders case-insensitively by code point so "files.go"
+// precedes "files_test.go" as in editor file trees.
+function explorerNameCompare(left, right) {
+  const leftKey = left.toLowerCase();
+  const rightKey = right.toLowerCase();
+  if (leftKey !== rightKey) return leftKey < rightKey ? -1 : 1;
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
+function explorerRow(kind, key, depth, expanded) {
+  const row = node("button", "explorer-row " + kind);
+  row.type = "button";
+  row.dataset.key = key;
+  row.setAttribute("role", "treeitem");
+  row.setAttribute("aria-level", String(depth + 1));
+  row.style.setProperty("--depth", depth);
+  if (expanded !== undefined) row.setAttribute("aria-expanded", String(expanded));
+  row.append(node("span", "explorer-chevron", expanded === undefined ? "" : "▶"));
+  return row;
+}
+
+function renderExplorer() {
+  const tree = $("explorer-tree");
+  if (!explorerTree) return;
+  const focusedKey = document.activeElement?.closest?.("#explorer-tree .explorer-row")?.dataset.key;
+  const changes = new Map((gitSnapshot?.changed_functions || []).map(item => [item.id, item.kind]));
+  const group = node("div", "explorer-group");
+  group.setAttribute("role", "group");
+  appendExplorerFolder(group, explorerTree, 0, changes);
+  tree.replaceChildren(group);
+  if (explorerFiles.length === 0) $("explorer-status").textContent = "No files found.";
+  else $("explorer-status").textContent = explorerTruncated ? "Showing the first files only; this project is very large." : "";
+  if (focusedKey) tree.querySelector(`[data-key="${CSS.escape(focusedKey)}"]`)?.focus();
+}
+
+function appendExplorerFolder(container, folder, depth, changes) {
+  folder.folders.forEach(child => {
+    const key = explorerFolderKey(child.path);
+    const expanded = explorerExpanded.has(key);
+    const row = explorerRow("folder", key, depth, expanded);
+    row.append(node("span", "explorer-icon", "▤"), node("span", "explorer-label", child.name));
+    row.title = child.path;
+    row.onclick = () => toggleExplorerNode(key);
+    container.append(row);
+    if (!expanded) return;
+    const group = node("div", "explorer-group");
+    group.setAttribute("role", "group");
+    appendExplorerFolder(group, child, depth + 1, changes);
+    container.append(group);
+  });
+  folder.files.forEach(file => appendExplorerFile(container, file, depth, changes));
+}
+
+function appendExplorerFile(container, file, depth, changes) {
+  const key = explorerFileKey(file.path);
+  const functions = visibleExplorerFunctions(file);
+  const expandable = functions.length > 0;
+  const expanded = expandable && explorerExpanded.has(key);
+  const row = explorerRow("file" + (expandable ? "" : " empty-file"), key, depth, expandable ? expanded : undefined);
+  row.title = file.path;
+  row.append(node("span", "explorer-icon", "▫"), node("span", "explorer-label", file.name));
+  const changeKind = functions.map(item => changes.get(item.id)).find(Boolean);
+  if (changeKind) row.append(changeMarker(changeKind));
+  if (expandable) {
+    row.append(node("span", "explorer-count", String(functions.length)));
+    row.onclick = () => toggleExplorerNode(key);
+  }
+  container.append(row);
+  if (!expanded) return;
+
+  const group = node("div", "explorer-group");
+  group.setAttribute("role", "group");
+  functions.forEach(item => {
+    const functionRow = explorerRow("function" + (item.test ? " test" : "") + (item.id === rootID ? " active" : ""), "function:" + item.id, depth + 1);
+    functionRow.title = item.qualified_name + " · line " + item.line;
+    const dot = node("i", "dot " + item.classification);
+    dot.title = item.classification;
+    functionRow.append(dot, node("span", "explorer-label", explorerFunctionLabel(item, file.path)));
+    if (changes.has(item.id)) functionRow.append(changeMarker(changes.get(item.id)));
+    functionRow.append(node("span", "explorer-line", String(item.line)));
+    functionRow.onclick = async () => {
+      await focusGraph(item.id, item.qualified_name);
+      if (explorerNarrowQuery.matches) setExplorerOpen(false, false);
+    };
+    group.append(functionRow);
+  });
+  container.append(group);
+}
+
+function changeMarker(kind) {
+  const marker = node("span", "explorer-change " + kind);
+  marker.title = kind + " in Git diff";
+  return marker;
+}
+
+function toggleExplorerNode(key) {
+  if (explorerExpanded.has(key)) explorerExpanded.delete(key);
+  else explorerExpanded.add(key);
+  renderExplorer();
+}
+
+function handleExplorerKeydown(event) {
+  const row = event.target.closest(".explorer-row");
+  if (!row) return;
+  const rows = Array.from($("explorer-tree").querySelectorAll(".explorer-row"));
+  const index = rows.indexOf(row);
+  const expanded = row.getAttribute("aria-expanded");
+  let target;
+  if (event.key === "ArrowDown") target = rows[index + 1];
+  else if (event.key === "ArrowUp") target = rows[index - 1];
+  else if (event.key === "ArrowRight" && expanded === "false") toggleExplorerNode(row.dataset.key);
+  else if (event.key === "ArrowLeft" && expanded === "true") toggleExplorerNode(row.dataset.key);
+  else return;
+  event.preventDefault();
+  if (target) target.focus();
 }

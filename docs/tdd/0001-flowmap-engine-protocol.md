@@ -411,8 +411,8 @@ path field appears on the wire.
 
 | Model | Fields |
 |---|---|
-| `SymbolSummary` | `symbolId`, `name`, `qualifiedName`, `namespace`, `language`, `signature`, `classification`, `public`, `test` |
-| `Symbol` | all summary identity fields plus `kind`, `location`, `parameters`, `results`, `contracts`, `intent`, `intentSource`, `source`, `anonymous`, `classificationDetail`, and optional `change` |
+| `SymbolSummary` | `symbolId`, `name`, `qualifiedName`, `namespace`, `language`, `signature`, `classification`, `public`, `test`, `location` |
+| `Symbol` | all summary fields plus `kind`, `parameters`, `results`, `contracts`, `intent`, `intentSource`, `source`, `anonymous`, `classificationDetail`, and optional `change` |
 | `SymbolChange` | `kind`, `diff` |
 | `Classification` | `kind`, `provenance`, `evidence` |
 | `Contract` | `name`, `kind`, `fields`, `methods` |
@@ -717,7 +717,12 @@ Engine response:
         "signature": "func Analyze(context.Context, Config) (*Index, error)",
         "classification": "effect",
         "public": true,
-        "test": false
+        "test": false,
+        "location": {
+          "uri": "file:///Users/alex/src/acme/internal/analyzer/analyzer.go",
+          "startLine": 25,
+          "endLine": 52
+        }
       }
     ]
   }

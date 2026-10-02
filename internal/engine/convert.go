@@ -25,6 +25,7 @@ func symbolSummary(function analyzer.Function) protocol.SymbolSummary {
 		Classification: function.Classification.Kind,
 		Public:         function.Public,
 		Test:           function.Test,
+		Location:       sourceLocation(function.File, function.Line, function.EndLine),
 	}
 }
 
@@ -34,7 +35,6 @@ func symbol(function analyzer.Function) protocol.Symbol {
 	result := protocol.Symbol{
 		SymbolSummary: symbolSummary(function),
 		Kind:          symbolKind(function),
-		Location:      sourceLocation(function.File, function.Line, function.EndLine),
 		Parameters:    nonNilStrings(function.Parameters),
 		Results:       nonNilStrings(function.Results),
 		Contracts:     contracts(function.Contracts),

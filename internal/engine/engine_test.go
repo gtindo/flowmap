@@ -190,6 +190,9 @@ func TestSnapshotPublicationRetentionAndQueries(t *testing.T) {
 	if err != nil || len(search.Items) != 1 || search.Items[0].QualifiedName != "sample.Root1" || !search.Items[0].Public || search.NextCursor != "" {
 		t.Fatalf("search = %#v, %v", search, err)
 	}
+	if location := search.Items[0].Location; location.URI != "file:///work/project/sample.go" || location.StartLine != 10 || location.EndLine != 14 {
+		t.Fatalf("search location = %#v", location)
+	}
 
 	symbol, err := harness.client.GetSymbol(ctx, protocol.SymbolGetParams{SnapshotQuery: query, SymbolID: "root"})
 	if err != nil || symbol.Kind != "function" || symbol.Location.URI != "file:///work/project/sample.go" || symbol.Location.StartLine != 10 || symbol.Location.EndLine != 14 || symbol.Change == nil || symbol.Change.Kind != "updated" || symbol.ClassificationDetail.Evidence == nil || symbol.Contracts == nil {

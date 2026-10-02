@@ -30,7 +30,8 @@
 </head>
 <body>
   <header class="app-header">
-    <div class="brand" aria-label="Flowmap">
+    <div class="brand">
+      <button id="explorer-toggle" class="icon-button explorer-toggle" title="Toggle file explorer (Ctrl/Cmd+B)" aria-label="Toggle file explorer" aria-controls="explorer" aria-expanded="true"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="15" rx="2"/><path d="M9.5 4.5v15"/></svg></button>
       <span class="brand-mark" aria-hidden="true">F</span>
       <strong>Flowmap</strong>
     </div>
@@ -66,34 +67,44 @@
   </header>
 
   <main>
-    <section id="empty">
-      <div class="empty-icon" aria-hidden="true">⌘</div>
-      <h1>Begin with a function.</h1>
-      <p>Search by package, receiver, or name. Flowmap reveals a focused typed neighborhood—not the whole-repository hairball.</p>
-    </section>
-    <section id="workspace" class="hidden">
-      <div id="legend">
-        <div class="classification"><span class="legend-title">Classification</span><span><i class="dot pure"></i>pure</span><span><i class="dot edge"></i>edge</span><span><i class="dot unknown"></i>unknown</span><span><i class="dash"></i>dynamic candidate</span></div>
-        <div class="context-controls">
-          <div class="control-group" aria-label="Navigation">
-            <button id="history-back" class="icon-button" title="Back to previous function" aria-label="Back to previous function" disabled>←</button>
-            <button id="history-forward" class="icon-button" title="Forward to next function" aria-label="Forward to next function" disabled>→</button>
-          </div>
-          <div class="control-group graph-options" aria-label="Graph options">
-            <label class="select-control"><span class="control-label">View</span><select id="view" aria-label="View mode"><option value="extended">Extended</option><option value="simple">Simplified</option></select></label>
-            <label class="select-control"><span class="control-label">Flow</span><select id="direction" aria-label="Graph direction"><option value="downstream">Downstream</option><option value="upstream">Upstream</option><option value="both">Both directions</option></select></label>
-            <label class="toggle-control"><input id="public-only" type="checkbox"><span>Public only</span></label>
-            <label class="toggle-control"><input id="tests" type="checkbox"><span>Tests</span></label>
+    <aside id="explorer" aria-label="File explorer">
+      <div class="explorer-header">
+        <span class="explorer-title">Files</span>
+        <span id="explorer-project" class="explorer-project"></span>
+      </div>
+      <p id="explorer-status" class="explorer-status"></p>
+      <div id="explorer-tree" class="explorer-tree" role="tree" aria-label="Project files and functions"></div>
+    </aside>
+    <div id="stage">
+      <section id="empty">
+        <div class="empty-icon" aria-hidden="true">⌘</div>
+        <h1>Begin with a function.</h1>
+        <p>Search by package, receiver, or name. Flowmap reveals a focused typed neighborhood—not the whole-repository hairball.</p>
+      </section>
+      <section id="workspace" class="hidden">
+        <div id="legend">
+          <div class="classification"><span class="legend-title">Classification</span><span><i class="dot pure"></i>pure</span><span><i class="dot edge"></i>edge</span><span><i class="dot unknown"></i>unknown</span><span><i class="dash"></i>dynamic candidate</span></div>
+          <div class="context-controls">
+            <div class="control-group" aria-label="Navigation">
+              <button id="history-back" class="icon-button" title="Back to previous function" aria-label="Back to previous function" disabled>←</button>
+              <button id="history-forward" class="icon-button" title="Forward to next function" aria-label="Forward to next function" disabled>→</button>
+            </div>
+            <div class="control-group graph-options" aria-label="Graph options">
+              <label class="select-control"><span class="control-label">View</span><select id="view" aria-label="View mode"><option value="extended">Extended</option><option value="simple">Simplified</option></select></label>
+              <label class="select-control"><span class="control-label">Flow</span><select id="direction" aria-label="Graph direction"><option value="downstream">Downstream</option><option value="upstream">Upstream</option><option value="both">Both directions</option></select></label>
+              <label class="toggle-control"><input id="public-only" type="checkbox"><span>Public only</span></label>
+              <label class="toggle-control"><input id="tests" type="checkbox"><span>Tests</span></label>
+            </div>
           </div>
         </div>
-      </div>
-      <div id="canvas-wrap"><svg id="canvas" class="hand"><defs><marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0 0L8 4 0 8z"></path></marker></defs><g id="edges"></g><g id="nodes"></g></svg></div>
-    </section>
-    <aside id="detail" class="hidden">
-      <div id="detail-resize" role="separator" aria-label="Resize detail panel" aria-orientation="vertical"></div>
-      <button id="close" class="icon-button" aria-label="Close details">×</button>
-      <div id="detail-content"></div>
-    </aside>
+        <div id="canvas-wrap"><svg id="canvas" class="hand"><defs><marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0 0L8 4 0 8z"></path></marker></defs><g id="edges"></g><g id="nodes"></g></svg></div>
+      </section>
+      <aside id="detail" class="hidden">
+        <div id="detail-resize" role="separator" aria-label="Resize detail panel" aria-orientation="vertical"></div>
+        <button id="close" class="icon-button" aria-label="Close details">×</button>
+        <div id="detail-content"></div>
+      </aside>
+    </div>
   </main>
   <script src="/app.js"></script>
 </body>

@@ -148,6 +148,15 @@ A new graph loads only one hop to preserve readability. In narrower windows, con
 
 Anonymous functions appear as graph nodes when they are called or passed by a visible function. You can inspect, expand, and focus them like other nodes, but they are omitted from search and Git change lists.
 
+### Browse Files
+
+The **Files** drawer on the left lists the selected project's files as a tree. Expand a source file to see the functions it declares in line order, then select one to make it the graph root. Focusing a function by any other route, such as search, **Changes**, or history navigation, reveals and highlights it in the tree.
+
+- Select the sidebar button beside the Flowmap logo, or press **Ctrl+B** (**Cmd+B** on macOS), to hide or show the drawer. The choice is saved in browser storage. In narrow windows the drawer overlays the graph and closes after you pick a function.
+- Inside a Git repository, the tree honors `.gitignore`. Elsewhere it skips `.git`, `node_modules`, `vendor`, and hidden directories. Very large projects are capped at 20,000 listed files.
+- Only files analyzed by the selected language view list functions; other files appear dimmed. Switch the language selector to browse another language's functions.
+- Test functions follow the **Tests** toggle. Files and functions with local Git changes carry the same blue or amber change marker as the graph.
+
 ## Choose a Color Theme
 
 Flowmap follows the operating system's light or dark appearance by default. Use the theme selector in the header to choose **System**, **Light**, or **Dark**. A manual choice is saved in browser storage; **System** continues to react to operating-system appearance changes.

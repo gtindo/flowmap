@@ -10,9 +10,11 @@ This package is the HTTP adapter over the Flowmap engine protocol and the refere
 |---|---|
 | `server.go` | `App`, workspace opening, routes, OpenTelemetry HTTP wrapping, request logging, project-scoped handlers, `Scan` (start analysis and await its notification), `workspace/get`-backed view state and status mapping, paging helpers, and protocol-error to HTTP-status mapping |
 | `convert.go` | Pure protocol → browser model translation (URIs to paths, camelCase to the `analyzer` JSON models, load reports for CLI warnings) |
+| `files.go` | File explorer edge and models: `.gitignore`-aware project file listing (Git, or a filtered directory walk outside Git) and pure grouping of symbol summaries under root-relative files |
 | `server_test.go` | API, static asset, rescan, concurrency, summary, and error-mapping coverage against a real in-process engine session |
+| `files_test.go` | File listing, grouping, and `/api/files` coverage |
 | `static/index.html` | Workbench document structure and controls |
-| `static/app.js` | API client, graph state, rendering, interaction, rescan, changes, and browser persistence |
+| `static/app.js` | API client, graph state, rendering, interaction, rescan, changes, file explorer drawer, and browser persistence |
 | `static/style.css` | Responsive visual system, graph/node layout, and light/dark presentation |
 | `static/sw.js` | Service worker and offline asset behavior |
 | `static/manifest.webmanifest` | Installable PWA metadata |
@@ -26,6 +28,7 @@ GET  /api/projects
 POST /api/projects/{name}/scan
 POST /api/projects/{name}/languages/{language}/scan
 GET  /api/search
+GET  /api/files
 GET  /api/graph
 GET  /api/functions/{id}
 GET  /api/git-status
@@ -34,7 +37,7 @@ POST /api/rescan
 GET  /*                              embedded static workbench
 ```
 
-Handlers resolve a project and language from `project=<name>&language=<language>` to an engine view, read its current snapshot from `workspace/get`, then issue `symbol/search`, `graph/neighborhood`, `symbol/get`, `changes/list`, or `symbol/summary`. A single-language project resolves omitted names for backwards compatibility. The adapter keeps the HTTP API's historical coercion of graph depth and direction because the protocol rejects invalid values. JSON errors use a small `{ "error": ... }` envelope. The returned handler is wrapped with OpenTelemetry HTTP instrumentation and telemetry-enabled structured request logging.
+Handlers resolve a project and language from `project=<name>&language=<language>` to an engine view, read its current snapshot from `workspace/get`, then issue `symbol/search`, `graph/neighborhood`, `symbol/get`, `changes/list`, or `symbol/summary`. `/api/files` pages every `symbol/search` result (tests included) and groups the summaries' locations under files listed from the project root; the file listing is a browser-only HTTP edge, not protocol data, because editor clients use their native file trees. A single-language project resolves omitted names for backwards compatibility. The adapter keeps the HTTP API's historical coercion of graph depth and direction because the protocol rejects invalid values. JSON errors use a small `{ "error": ... }` envelope. The returned handler is wrapped with OpenTelemetry HTTP instrumentation and telemetry-enabled structured request logging.
 
 ## Rescan Flow
 
@@ -54,7 +57,7 @@ Summaries are available only when the engine advertises the `symbolSummary` capa
 
 ## Browser Workbench
 
-The static application searches functions, fetches focused graph neighborhoods, displays contracts/source/Git deltas, and preserves local layout preferences. Its per-project/language public-boundary toggle filters rendered upstream/downstream nodes and edges without changing the fetched graph or search results, while retaining the focused function. It consumes only the local API and is embedded into the Go binary with `embed.FS`.
+The static application searches functions, fetches focused graph neighborhoods, displays contracts/source/Git deltas, and preserves local layout preferences. Its per-project/language public-boundary toggle filters rendered upstream/downstream nodes and edges without changing the fetched graph or search results, while retaining the focused function. A hideable left file explorer drawer (`Ctrl/Cmd+B`) loads `/api/files` once per published snapshot, builds a compacted folder tree in the browser, renders children only for expanded nodes, filters test functions by the Tests toggle, marks Git changes, focuses the graph on a selected function, and reveals the current graph root. It consumes only the local API and is embedded into the Go binary with `embed.FS`.
 
 Changes under `static/` require the existing two-space indentation and before/after screenshots in pull requests when presentation changes.
 

@@ -298,24 +298,25 @@ type SourceLocation struct {
 	EndLine   int    `json:"endLine"`
 }
 
-// SymbolSummary is the compact symbol representation used by search.
+// SymbolSummary is the compact symbol representation used by search. Its
+// location lets clients group symbols by file without fetching each symbol.
 type SymbolSummary struct {
-	SymbolID       string `json:"symbolId"`
-	Name           string `json:"name"`
-	QualifiedName  string `json:"qualifiedName"`
-	Namespace      string `json:"namespace"`
-	Language       string `json:"language"`
-	Signature      string `json:"signature"`
-	Classification string `json:"classification"`
-	Public         bool   `json:"public"`
-	Test           bool   `json:"test"`
+	SymbolID       string         `json:"symbolId"`
+	Name           string         `json:"name"`
+	QualifiedName  string         `json:"qualifiedName"`
+	Namespace      string         `json:"namespace"`
+	Language       string         `json:"language"`
+	Signature      string         `json:"signature"`
+	Classification string         `json:"classification"`
+	Public         bool           `json:"public"`
+	Test           bool           `json:"test"`
+	Location       SourceLocation `json:"location"`
 }
 
 // Symbol is the full representation of one analyzed callable.
 type Symbol struct {
 	SymbolSummary
 	Kind                 string         `json:"kind"`
-	Location             SourceLocation `json:"location"`
 	Parameters           []string       `json:"parameters"`
 	Results              []string       `json:"results"`
 	Contracts            []Contract     `json:"contracts"`
